@@ -1,0 +1,13 @@
+# Cargo / ESP-IDF build
+**/target/
+**/.embuild/
+*.bin
+
+# Tooling / indexes
+.codebase-index/
+**/.codebase-index/
+
+# Editor / OS
+*.swp
+*~
+.DS_Store

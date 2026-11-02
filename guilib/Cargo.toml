@@ -1,0 +1,22 @@
+[package]
+name = "guilib"
+version = "0.1.0"
+edition = "2024"
+description = "GPUI layout components: View, Panel, Card, Button, and TimeLine"
+publish = false
+license = "MIT"
+
+[dependencies]
+gpui = "0.2.2"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+# gpui 0.2.2 -> zed-async-tar -> xattr 0.2.3 uses libc::ENOATTR, which current libc no
+# longer exports on Linux. Local copy maps it to ENODATA (same value on Linux).
+# gpui -> stacksafe-macro -> proc-macro-error2 2.0.1 re-exports a private `proc_macro`
+# crate (E0365 / rust-lang#127909). Unmaintained; local copy makes `extern crate` public.
+[patch.crates-io]
+xattr = { path = "patches/xattr" }
+proc-macro-error2 = { path = "patches/proc-macro-error2" }

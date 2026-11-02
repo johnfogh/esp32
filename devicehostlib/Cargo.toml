@@ -1,0 +1,16 @@
+[package]
+name = "devicehostlib"
+version = "0.1.0"
+edition = "2024"
+description = "Host-side BLE device manager, virtual sensors, and devices.json"
+publish = false
+
+[dependencies]
+utils = { package = "esp32-utils", path = "../utils", features = ["host"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+bluer = { version = "0.17", features = ["bluetoothd"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+futures = "0.3"
+uuid = "1"

@@ -1,0 +1,4 @@
+/target
+*.bin
+.embuild/
+.codebase-index/

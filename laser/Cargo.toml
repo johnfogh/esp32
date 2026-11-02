@@ -1,0 +1,43 @@
+[package]
+name = "esp32-laser"
+version = "0.10.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "esp32-laser"
+test = false
+bench = false
+
+[features]
+default = ["esp32", "hal"]
+esp32   = ["utils/esp32"]
+esp32s2 = ["utils/esp32s2"]
+esp32s3 = ["utils/esp32s3", "display", "imu"]  # S3 = Waveshare ESP32-S3-Touch-LCD-2: status screen on by default
+esp32c3 = ["utils/esp32c3"]
+esp32c6 = ["utils/esp32c6"]
+esp32h2 = ["utils/esp32h2"]
+hal = ["utils/hal", "utils/ble"]
+# Status screen (utils::display; hal + esp32s3 only, a no-op elsewhere).
+display = ["utils/display"]
+# QMI8658 accelerometer (utils::get_accelerometers / BLE get_accelerometers; hal + esp32s3 only).
+imu = ["utils/imu"]
+# esp-idf-svc is a direct dep so build.rs receives its linker args (DEP_ESP_IDF_SVC_*).
+idf = ["utils/idf", "utils/ble", "dep:esp-idf-svc"]
+
+[dependencies]
+utils = { package = "esp32-utils", path = "../utils" }
+log = "0.4"
+esp-idf-svc = { version = "0.53", optional = true }
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = 2

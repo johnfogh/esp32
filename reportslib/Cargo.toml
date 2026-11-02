@@ -1,0 +1,18 @@
+[package]
+name = "reportslib"
+version = "0.1.0"
+edition = "2024"
+description = "Generate self-contained static HTML reports"
+publish = false
+license = "MIT"
+
+[dependencies]
+base64 = "0.22"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "main_section"
+path = "examples/main_section.rs"

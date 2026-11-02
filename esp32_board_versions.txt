@@ -1,0 +1,57 @@
+ESP32 Board Versions and Capabilities
+====================================
+
+Overview
+--------
+ESP32 board versions primarily differ by the underlying Espressif chip
+(original ESP32, S-series, C-series, H-series, P-series, etc.).
+Development boards (DevKitC, NodeMCU-style, SuperMini, etc.) are built
+around modules (WROOM, WROVER, MINI, etc.) that contain one of these chips,
+plus flash, optional PSRAM, antenna, and USB circuitry.
+
+Exact GPIO count, flash size, and PSRAM vary by specific module/board.
+Always check the datasheet or board docs for pinouts and available pins.
+
+Main Chip Comparison
+--------------------
+
+Chip                    | CPU                          | Max Clock | Wi-Fi                          | Bluetooth          | Thread/Zigbee (802.15.4) | USB                      | Notable Features                          | Best For
+------------------------|------------------------------|-----------|--------------------------------|--------------------|--------------------------|--------------------------|-------------------------------------------|------------------------------------------
+ESP32 (original)        | Dual-core Xtensa LX6        | 240 MHz   | Wi-Fi 4 (2.4 GHz)              | Classic + BLE 4.2  | No                       | No (USB-UART bridge)     | Ethernet MAC, DAC, touch, mature ecosystem| Bluetooth Classic, legacy, general IoT
+ESP32-S2                | Single-core Xtensa LX7       | 240 MHz   | Wi-Fi 4 (2.4 GHz)              | None               | No                       | USB OTG                  | Touch, DAC, good GPIO                     | USB devices (HID, MIDI, etc.)
+ESP32-S3                | Dual-core Xtensa LX7         | 240 MHz   | Wi-Fi 4 (2.4 GHz)              | BLE 5              | No                       | USB OTG + Serial/JTAG    | Vector instructions (AI/ML), camera/LCD, PSRAM options | General-purpose, cameras, displays, audio, edge AI
+ESP32-C2                | Single-core RISC-V           | ~120 MHz  | Wi-Fi 4 (2.4 GHz)              | BLE 5              | No                       | Limited / none           | Lowest cost                               | Simple low-cost Wi-Fi + BLE nodes
+ESP32-C3                | Single-core RISC-V           | 160 MHz   | Wi-Fi 4 (2.4 GHz)              | BLE 5              | No                       | USB Serial/JTAG          | Low power, low cost                       | Cheap sensors, ESPHome, Wi-Fi + BLE IoT
+ESP32-C6                | RISC-V HP + LP core          | 160 MHz   | Wi-Fi 6 (2.4 GHz)              | BLE 5.x            | Yes                      | USB Serial/JTAG          | Matter-ready                              | Matter, Thread, Zigbee + Wi-Fi
+ESP32-C5                | RISC-V (HP + LP)             | 240 MHz   | Wi-Fi 6 dual-band (2.4 + 5 GHz)| BLE 5              | Yes                      | USB Serial/JTAG          | Dual-band Wi-Fi                           | 5 GHz Wi-Fi + smart home
+ESP32-C61               | Single-core RISC-V           | 160 MHz   | Wi-Fi 6 (2.4 GHz)              | BLE 5              | No                       | USB Serial/JTAG          | Cost-optimized Wi-Fi 6                    | Wi-Fi 6 without 802.15.4
+ESP32-H2                | Single-core RISC-V           | 96 MHz    | None                           | BLE 5.x            | Yes                      | USB Serial/JTAG          | Very low power                            | Battery Thread/Zigbee/BLE sensors (no Wi-Fi)
+ESP32-P4                | Dual-core RISC-V (HP + LP)   | 400 MHz   | None                           | None               | No                       | USB 2.0 HS/FS            | High performance, MIPI display/camera, Ethernet | HMI, large displays, vision, multimedia
+ESP32-S31 (newer)       | Dual-core RISC-V             | 320 MHz   | Wi-Fi 6 (2.4 GHz)              | Classic + BLE 5.4  | Yes                      | USB OTG + Serial/JTAG    | Gigabit Ethernet MAC, more GPIO, SIMD     | Advanced multi-radio hubs, HMI, high-performance IoT
+
+Notes on Common Boards
+----------------------
+- ESP32-DevKitC / NodeMCU-32S style — Original ESP32 (WROOM-32 or similar). Most Arduino tutorials target this.
+- ESP32-S3-DevKitC — Current recommended general-purpose board (USB-C, optional PSRAM).
+- ESP32-C3-DevKit / SuperMini — Low-cost Wi-Fi + BLE.
+- ESP32-C6-DevKit — For Matter/Thread/Zigbee experiments.
+- WROVER modules — Include PSRAM (useful for displays, cameras, buffering).
+- ESP32-CAM — Original ESP32 + OV2640 camera (limited pins, external programmer often needed).
+
+Quick Selection Guide
+---------------------
+- General Arduino / ESPHome / IoT     → ESP32-S3 (with PSRAM if using displays/cameras)
+- Cheapest Wi-Fi + BLE sensor         → ESP32-C3
+- Matter / Thread / Zigbee            → ESP32-C6 (or H2 if no Wi-Fi needed)
+- 5 GHz Wi-Fi                         → ESP32-C5
+- Bluetooth Classic (audio, classic SPP) → Original ESP32 (or S31 when widely available)
+- Large displays / high performance / no radio → ESP32-P4
+- First board / maximum tutorial compatibility → Original ESP32 DevKitC or ESP32-S3 DevKitC
+
+Notes
+-----
+Capabilities evolve. Always verify the exact module revision and datasheet
+for your board, especially for power modes, available GPIOs, and radio features.
+Official Espressif chip comparator and datasheets are the best primary sources.
+
+Generated: October 13, 2026
