@@ -323,7 +323,15 @@ impl Host {
         let theme = theme::load_current().0;
         let projects = utils::host::list_projects(
             &esp32_root(),
-            &["utils", "target_editor", "scriptlib", "targetlib", "devicehostlib", "devicelib", "reportslib"],
+            &[
+                "utils",
+                "target_editor",
+                "designer",
+                "scriptlib",
+                "targetlib",
+                "devicehostlib",
+                "reportslib",
+            ],
         );
         let mut ctrl = crate::ctrl::App::new(projects, theme);
         ctrl.actions_err = crate::actions::init();

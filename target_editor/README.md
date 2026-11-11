@@ -29,8 +29,10 @@ Colours follow the current Omarchy theme (`~/.config/omarchy/current/theme` or
 
 ## Flash
 
-Device Flash: pick a connected chip and a firmware project (`~/dev/esp32`, skips `utils`,
-`target_editor`, `scriptlib`, `targetlib`, `devicehostlib`, `devicelib`, and `reportslib`). Output fills the remaining window. `b` build, `f` flash, `r` refresh USB. PgUp/PgDn scrolls output.
+Device Flash: pick a connected chip and a firmware project (`~/dev/esp32`, skips host-only
+dirs: `utils`, `target_editor`, `designer`, `scriptlib`, `targetlib`, `devicehostlib`,
+`reportslib`). Output fills the remaining window. `b` build, `f` flash, `r` refresh USB.
+PgUp/PgDn scrolls output.
 `--build <project> <chip>` runs the same build with no window.
 
 ## Manager

@@ -7,6 +7,10 @@
 .codebase-index/
 **/.codebase-index/
 
+# Local agent / scratch notes (not part of the product tree)
+agent_output/
+work.md
+
 # Editor / OS
 *.swp
 *~
