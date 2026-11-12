@@ -3007,7 +3007,7 @@ impl Designer {
             return;
         }
         self.flash_busy = true;
-        self.flash_status = "Scanning for boards…".to_string();
+        self.flash_status = scanning_flash_status().to_string();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let boards = cx
@@ -3025,7 +3025,7 @@ impl Designer {
                 this.flash_status = if n == 0 {
                     no_boards_flash_status().to_string()
                 } else {
-                    format!("{n} board(s) found.")
+                    boards_found_flash_status(n)
                 };
                 cx.notify();
             });
@@ -3572,6 +3572,21 @@ fn device_flash_confirm_detail(name: &str, idx: usize, project: FlashProject) ->
     )
 }
 
+/// Status shown before the Devices view triggers its first USB scan.
+fn initial_flash_status() -> &'static str {
+    "Open Devices to scan for boards."
+}
+
+/// Status while USB board detection is running.
+fn scanning_flash_status() -> &'static str {
+    "Scanning for boards…"
+}
+
+/// Status after a scan finds one or more boards.
+fn boards_found_flash_status(n: usize) -> String {
+    format!("{n} board(s) found.")
+}
+
 /// Status when flash is requested with no detected USB boards.
 fn no_boards_flash_status() -> &'static str {
     "No boards found. Plug in a device."
@@ -3722,7 +3737,7 @@ fn main() {
                         device_name_edit: None,
                         device_project_menu_open: None,
                         flash_boards: Vec::new(),
-                        flash_status: "Open Devices to scan for boards.".to_string(),
+                        flash_status: initial_flash_status().to_string(),
                         flash_busy: false,
                         cursor_ms: 0,
                         events: vec![],
@@ -3887,6 +3902,26 @@ mod tests {
             no_boards_flash_status(),
             "No boards found. Plug in a device."
         );
+    }
+
+    #[test]
+    fn initial_flash_status_prompts_to_open_devices() {
+        assert_eq!(
+            initial_flash_status(),
+            "Open Devices to scan for boards."
+        );
+    }
+
+    #[test]
+    fn scanning_flash_status_indicates_in_progress() {
+        assert_eq!(scanning_flash_status(), "Scanning for boards…");
+    }
+
+    #[test]
+    fn boards_found_flash_status_reports_count() {
+        assert_eq!(boards_found_flash_status(0), "0 board(s) found.");
+        assert_eq!(boards_found_flash_status(1), "1 board(s) found.");
+        assert_eq!(boards_found_flash_status(3), "3 board(s) found.");
     }
 
     #[test]
