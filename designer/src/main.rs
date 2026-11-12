@@ -235,8 +235,6 @@ struct Designer {
     device_project_menu_open: Option<usize>,
     /// USB boards detected for flashing.
     flash_boards: Vec<FlashBoard>,
-    flash_project: FlashProject,
-    flash_project_menu_open: bool,
     flash_status: String,
     flash_busy: bool,
     cursor_ms: u32,
@@ -304,7 +302,6 @@ impl Designer {
         self.timer_name_menu_open = None;
         self.device_name_edit = None;
         self.device_project_menu_open = None;
-        self.flash_project_menu_open = false;
     }
 
     fn write_to_path(&self, path: &Path) -> bool {
@@ -887,7 +884,6 @@ impl Designer {
             return;
         };
         self.flash_busy = true;
-        self.flash_project_menu_open = false;
         self.device_project_menu_open = None;
         self.flash_status = format!(
             "Flashing {} ({}) with {}…",
@@ -1293,13 +1289,6 @@ impl Designer {
 
         if key == "escape" && self.device_project_menu_open.is_some() {
             self.device_project_menu_open = None;
-            cx.notify();
-            cx.stop_propagation();
-            return;
-        }
-
-        if key == "escape" && self.flash_project_menu_open {
-            self.flash_project_menu_open = false;
             cx.notify();
             cx.stop_propagation();
             return;
@@ -3018,7 +3007,6 @@ impl Designer {
             return;
         }
         self.flash_busy = true;
-        self.flash_project_menu_open = false;
         self.flash_status = "Scanning for boards…".to_string();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -3035,40 +3023,10 @@ impl Designer {
                 this.flash_boards = boards;
                 this.flash_busy = false;
                 this.flash_status = if n == 0 {
-                    "No boards found. Plug in a device and Refresh.".to_string()
+                    no_boards_flash_status().to_string()
                 } else {
                     format!("{n} board(s) found.")
                 };
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn flash_board_at(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.flash_busy {
-            return;
-        }
-        let Some(board) = self.flash_boards.get(index).cloned() else {
-            return;
-        };
-        let project = self.flash_project;
-        self.flash_busy = true;
-        self.flash_project_menu_open = false;
-        self.flash_status = format!(
-            "Flashing {} ({}) with {}…",
-            board.port,
-            board.chip.name(),
-            project.label()
-        );
-        cx.notify();
-        cx.spawn(async move |this, cx| {
-            let status = cx
-                .background_spawn(async move { flash_firmware(project, &board.port, board.chip) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.flash_busy = false;
-                this.flash_status = status;
                 cx.notify();
             });
         })
@@ -3082,103 +3040,9 @@ impl Designer {
         let nested_card_bg = rgb(0x1e1e1e);
         let selected_bg = rgb(0x094771);
         let hover = rgb(0x3a3a3a);
-        let flash_busy = self.flash_busy;
-        let project_menu_open = self.flash_project_menu_open;
-        let flash_project = self.flash_project;
         let flash_status = self.flash_status.clone();
         let device_name_edit = self.device_name_edit.clone();
         let device_project_menu_open = self.device_project_menu_open;
-
-        let mut project_opts = Vec::new();
-        for (opt_i, opt) in FlashProject::all().into_iter().enumerate() {
-            let is_active = opt == flash_project;
-            project_opts.push(
-                div()
-                    .id(("flash-project-opt", opt_i))
-                    .cursor_pointer()
-                    .px_3()
-                    .py_1()
-                    .bg(if is_active { selected_bg } else { rgb(0x2d2d2d) })
-                    .hover(|s| s.bg(hover))
-                    .text_xs()
-                    .text_color(rgb(0xc0c0c0))
-                    .child(opt.label())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.flash_project = opt;
-                            this.flash_project_menu_open = false;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
-            );
-        }
-
-        let mut board_els = Vec::new();
-        for (i, board) in self.flash_boards.iter().enumerate() {
-            let port = board.port.clone();
-            let chip_name = board.chip.name().to_string();
-            board_els.push(
-                div()
-                    .id(("flash-board-card", i))
-                    .flex_none()
-                    .min_w(px(220.0))
-                    .w(px(220.0))
-                    .px_2()
-                    .py_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(line)
-                    .bg(card_bg)
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xffffff))
-                            .child(chip_name),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0xa0a0a0))
-                            .child(port),
-                    )
-                    .child(
-                        div()
-                            .id(("flash-board-btn", i))
-                            .cursor_pointer()
-                            .mt_1()
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .bg(if flash_busy {
-                                rgb(0x3a3a3a)
-                            } else {
-                                selected_bg
-                            })
-                            .hover(|s| {
-                                if flash_busy {
-                                    s
-                                } else {
-                                    s.bg(rgb(0x0e639c))
-                                }
-                            })
-                            .text_xs()
-                            .text_color(rgb(0xffffff))
-                            .child(if flash_busy { "Busy…" } else { "Flash" })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.flash_board_at(i, cx);
-                                    cx.stop_propagation();
-                                }),
-                            ),
-                    ),
-            );
-        }
 
         let mut card_els = Vec::new();
         for (i, device) in self.devices.iter().enumerate() {
@@ -3282,7 +3146,6 @@ impl Designer {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
-                                                    this.flash_project_menu_open = false;
                                                     this.device_project_menu_open = None;
                                                     this.commit_device_name_edit(cx);
                                                     let current = this
@@ -3335,7 +3198,6 @@ impl Designer {
                                                     if this.flash_busy {
                                                         return;
                                                     }
-                                                    this.flash_project_menu_open = false;
                                                     this.commit_device_name_edit(cx);
                                                     this.device_project_menu_open =
                                                         if this.device_project_menu_open == Some(i)
@@ -3384,124 +3246,14 @@ impl Designer {
                 div()
                     .text_sm()
                     .text_color(rgb(0xffffff))
-                    .child("Flash Devices"),
-            )
-            .child(
-                div()
-                    .id("flash-toolbar")
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("flash-project-select")
-                            .relative()
-                            .child(
-                                div()
-                                    .id("flash-project-value")
-                                    .cursor_pointer()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_sm()
-                                    .border_1()
-                                    .border_color(line)
-                                    .bg(if project_menu_open {
-                                        selected_bg
-                                    } else {
-                                        rgb(0x2d2d2d)
-                                    })
-                                    .text_xs()
-                                    .text_color(rgb(0xc0c0c0))
-                                    .child(format!("Project: {}", flash_project.label()))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            if this.flash_busy {
-                                                return;
-                                            }
-                                            this.device_name_edit = None;
-                                            this.device_project_menu_open = None;
-                                            this.flash_project_menu_open =
-                                                !this.flash_project_menu_open;
-                                            this.focus_handle.focus(window);
-                                            cx.stop_propagation();
-                                            cx.notify();
-                                        }),
-                                    ),
-                            )
-                            .when(project_menu_open, |row| {
-                                row.child(
-                                    div()
-                                        .id("flash-project-menu")
-                                        .absolute()
-                                        .top_full()
-                                        .left_0()
-                                        .mt_1()
-                                        .min_w(px(120.0))
-                                        .border_1()
-                                        .border_color(line)
-                                        .bg(rgb(0x2d2d2d))
-                                        .py_1()
-                                        .children(project_opts),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id("flash-refresh")
-                            .cursor_pointer()
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .bg(if flash_busy {
-                                rgb(0x3a3a3a)
-                            } else {
-                                rgb(0x3a3a3a)
-                            })
-                            .hover(|s| {
-                                if flash_busy {
-                                    s
-                                } else {
-                                    s.bg(rgb(0x505050))
-                                }
-                            })
-                            .text_xs()
-                            .text_color(rgb(0xffffff))
-                            .child(if flash_busy { "Working…" } else { "Refresh" })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.refresh_flash_boards(cx);
-                                    cx.stop_propagation();
-                                }),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .text_color(rgb(0xa0a0a0))
-                            .child(flash_status),
-                    ),
-            )
-            .child(
-                div()
-                    .id("flash-board-cards")
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_start()
-                    .gap_2()
-                    .children(board_els),
-            )
-            .child(
-                div()
-                    .mt_2()
-                    .text_sm()
-                    .text_color(rgb(0xffffff))
                     .child("Devices"),
+            )
+            .child(
+                div()
+                    .id("flash-status")
+                    .text_xs()
+                    .text_color(rgb(0xa0a0a0))
+                    .child(flash_status),
             )
             .child(
                 div()
@@ -3765,11 +3517,11 @@ impl Render for Designer {
                                         this.timer_name_menu_open = None;
                                         this.device_name_edit = None;
                                         this.device_project_menu_open = None;
-                                        this.flash_project_menu_open = false;
                                         this.view = AppView::Devices;
                                         this.menu_open = false;
                                         this.targets_sidebar = None;
                                         this.units_menu_open = false;
+                                        this.refresh_flash_boards(cx);
                                         cx.notify();
                                     }),
                                 ),
@@ -3822,7 +3574,7 @@ fn device_flash_confirm_detail(name: &str, idx: usize, project: FlashProject) ->
 
 /// Status when flash is requested with no detected USB boards.
 fn no_boards_flash_status() -> &'static str {
-    "No boards found. Plug in a device and Refresh."
+    "No boards found. Plug in a device."
 }
 
 fn firmware_dir(project: FlashProject) -> PathBuf {
@@ -3970,9 +3722,7 @@ fn main() {
                         device_name_edit: None,
                         device_project_menu_open: None,
                         flash_boards: Vec::new(),
-                        flash_project: FlashProject::Laser,
-                        flash_project_menu_open: false,
-                        flash_status: "Plug in a board and click Refresh.".to_string(),
+                        flash_status: "Open Devices to scan for boards.".to_string(),
                         flash_busy: false,
                         cursor_ms: 0,
                         events: vec![],
@@ -4132,10 +3882,10 @@ mod tests {
     }
 
     #[test]
-    fn no_boards_flash_status_asks_to_refresh() {
+    fn no_boards_flash_status_asks_to_plug_in() {
         assert_eq!(
             no_boards_flash_status(),
-            "No boards found. Plug in a device and Refresh."
+            "No boards found. Plug in a device."
         );
     }
 
