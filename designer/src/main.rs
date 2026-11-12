@@ -91,7 +91,7 @@ struct DeviceCard {
 }
 
 /// Firmware project flashed onto USB boards from the Devices view.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlashProject {
     Laser,
     Sensor,
