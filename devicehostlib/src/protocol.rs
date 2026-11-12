@@ -537,4 +537,58 @@ mod tests {
             "set_name: error: not a hub"
         );
     }
+
+    #[test]
+    fn silent_and_log_result_actions() {
+        assert!(is_silent("set_time"));
+        assert!(is_silent("buffer_ack"));
+        assert!(is_silent("read_buffer"));
+        assert!(!is_silent("ping"));
+        assert!(!logs_result("set_time"));
+        assert!(!logs_result("buffer_ack"));
+        assert!(logs_result("read_buffer"));
+        assert!(logs_result("ping"));
+    }
+
+    #[test]
+    fn action_name_reads_json_field() {
+        assert_eq!(
+            action_name(r#"{"action":"ping","params":[]}"#).as_deref(),
+            Some("ping")
+        );
+        assert_eq!(action_name(r#"{"params":[]}"#), None);
+        assert_eq!(
+            action_name(r#"{"action":"set_name","params":["a"]}"#).as_deref(),
+            Some("set_name")
+        );
+    }
+
+    #[test]
+    fn parse_ack_seqs_splits_and_rejects_empty() {
+        assert_eq!(parse_ack_seqs("1, 2,3").unwrap(), vec![1, 2, 3]);
+        assert_eq!(parse_ack_seqs("42").unwrap(), vec![42]);
+        assert!(parse_ack_seqs("").is_err());
+        assert!(parse_ack_seqs("1,x").is_err());
+    }
+
+    #[test]
+    fn parse_duration_ms_plain_and_clock() {
+        assert_eq!(parse_duration_ms("1500"), Some(1500));
+        assert_eq!(parse_duration_ms("1:02.5"), Some(62_500));
+        assert_eq!(parse_duration_ms("0:00.250"), Some(250));
+        assert_eq!(parse_duration_ms("2.5"), Some(2500));
+        assert_eq!(parse_duration_ms("1:60"), None);
+        assert_eq!(parse_duration_ms("1:02.9999"), None);
+        assert_eq!(parse_duration_ms("nope"), None);
+    }
+
+    #[test]
+    fn execute_ping_and_missing_action() {
+        let hub = Hub::new();
+        assert_eq!(
+            execute(&hub.hub, r#"{"action":"ping","params":[]}"#),
+            "ping: pong"
+        );
+        assert!(execute(&hub.hub, r#"{"params":[]}"#).starts_with("command: error:"));
+    }
 }
