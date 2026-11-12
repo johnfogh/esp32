@@ -1288,6 +1288,7 @@ name = "designer"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "esp32-utils",
  "gpui",
  "libc",
  "serde",
@@ -1544,6 +1545,13 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "esp32-utils"
+version = "0.12.0"
+dependencies = [
+ "log",
 ]
 
 [[package]]

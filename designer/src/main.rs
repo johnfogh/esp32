@@ -12,6 +12,7 @@ use gpui::{
     point, prelude::*, px, relative, rgb, size,
 };
 use serde::{Deserialize, Serialize};
+use utils::host::{Chip, Framework, build_command, detect_boards, elf_path, flash_command};
 
 actions!(
     timeline,
@@ -87,6 +88,39 @@ struct ProjectDocument {
 struct DeviceCard {
     /// Selected layout Target cell name.
     target_name: String,
+}
+
+/// Firmware project flashed onto USB boards from the Devices view.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlashProject {
+    Laser,
+    Sensor,
+}
+
+impl FlashProject {
+    fn label(self) -> &'static str {
+        match self {
+            FlashProject::Laser => "Laser",
+            FlashProject::Sensor => "Sensor",
+        }
+    }
+
+    fn dir_name(self) -> &'static str {
+        match self {
+            FlashProject::Laser => "laser",
+            FlashProject::Sensor => "sensor",
+        }
+    }
+
+    fn all() -> [FlashProject; 2] {
+        [FlashProject::Laser, FlashProject::Sensor]
+    }
+}
+
+#[derive(Clone)]
+struct FlashBoard {
+    port: String,
+    chip: Chip,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +229,12 @@ struct Designer {
     timer_name_menu_open: Option<(usize, usize)>,
     /// Open device target-name select as device index, if any.
     device_target_menu_open: Option<usize>,
+    /// USB boards detected for flashing.
+    flash_boards: Vec<FlashBoard>,
+    flash_project: FlashProject,
+    flash_project_menu_open: bool,
+    flash_status: String,
+    flash_busy: bool,
     cursor_ms: u32,
     events: Vec<Event>,
     devices: Vec<DeviceCard>,
@@ -259,6 +299,7 @@ impl Designer {
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
         self.device_target_menu_open = None;
+        self.flash_project_menu_open = false;
     }
 
     fn write_to_path(&self, path: &Path) -> bool {
@@ -1116,6 +1157,13 @@ impl Designer {
 
         if key == "escape" && self.device_target_menu_open.is_some() {
             self.device_target_menu_open = None;
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+
+        if key == "escape" && self.flash_project_menu_open {
+            self.flash_project_menu_open = false;
             cx.notify();
             cx.stop_propagation();
             return;
@@ -2819,6 +2867,68 @@ impl Designer {
             .children(event_els)
     }
 
+    fn refresh_flash_boards(&mut self, cx: &mut Context<Self>) {
+        if self.flash_busy {
+            return;
+        }
+        self.flash_busy = true;
+        self.flash_project_menu_open = false;
+        self.flash_status = "Scanning for boards…".to_string();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let boards = cx
+                .background_spawn(async move {
+                    detect_boards(10)
+                        .into_iter()
+                        .map(|(port, chip)| FlashBoard { port, chip })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let n = boards.len();
+                this.flash_boards = boards;
+                this.flash_busy = false;
+                this.flash_status = if n == 0 {
+                    "No boards found. Plug in a device and Refresh.".to_string()
+                } else {
+                    format!("{n} board(s) found.")
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn flash_board_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.flash_busy {
+            return;
+        }
+        let Some(board) = self.flash_boards.get(index).cloned() else {
+            return;
+        };
+        let project = self.flash_project;
+        self.flash_busy = true;
+        self.flash_project_menu_open = false;
+        self.flash_status = format!(
+            "Flashing {} ({}) with {}…",
+            board.port,
+            board.chip.name(),
+            project.label()
+        );
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_spawn(async move { flash_firmware(project, &board.port, board.chip) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.flash_busy = false;
+                this.flash_status = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn render_devices(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let line = rgb(0x505050);
         let pane_bg = rgb(0x252526);
@@ -2828,6 +2938,101 @@ impl Designer {
         let hover = rgb(0x3a3a3a);
         let target_names = self.layout_target_names();
         let menu_open_idx = self.device_target_menu_open;
+        let flash_busy = self.flash_busy;
+        let project_menu_open = self.flash_project_menu_open;
+        let flash_project = self.flash_project;
+        let flash_status = self.flash_status.clone();
+
+        let mut project_opts = Vec::new();
+        for (opt_i, opt) in FlashProject::all().into_iter().enumerate() {
+            let is_active = opt == flash_project;
+            project_opts.push(
+                div()
+                    .id(("flash-project-opt", opt_i))
+                    .cursor_pointer()
+                    .px_3()
+                    .py_1()
+                    .bg(if is_active { selected_bg } else { rgb(0x2d2d2d) })
+                    .hover(|s| s.bg(hover))
+                    .text_xs()
+                    .text_color(rgb(0xc0c0c0))
+                    .child(opt.label())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.flash_project = opt;
+                            this.flash_project_menu_open = false;
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+
+        let mut board_els = Vec::new();
+        for (i, board) in self.flash_boards.iter().enumerate() {
+            let port = board.port.clone();
+            let chip_name = board.chip.name().to_string();
+            board_els.push(
+                div()
+                    .id(("flash-board-card", i))
+                    .flex_none()
+                    .min_w(px(220.0))
+                    .w(px(220.0))
+                    .px_2()
+                    .py_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(line)
+                    .bg(card_bg)
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xffffff))
+                            .child(chip_name),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0xa0a0a0))
+                            .child(port),
+                    )
+                    .child(
+                        div()
+                            .id(("flash-board-btn", i))
+                            .cursor_pointer()
+                            .mt_1()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(if flash_busy {
+                                rgb(0x3a3a3a)
+                            } else {
+                                selected_bg
+                            })
+                            .hover(|s| {
+                                if flash_busy {
+                                    s
+                                } else {
+                                    s.bg(rgb(0x0e639c))
+                                }
+                            })
+                            .text_xs()
+                            .text_color(rgb(0xffffff))
+                            .child(if flash_busy { "Busy…" } else { "Flash" })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.flash_board_at(i, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    ),
+            );
+        }
 
         let mut card_els = Vec::new();
         for (i, device) in self.devices.iter().enumerate() {
@@ -2934,6 +3139,7 @@ impl Designer {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
+                                                    this.flash_project_menu_open = false;
                                                     this.device_target_menu_open =
                                                         if this.device_target_menu_open == Some(i)
                                                         {
@@ -2979,6 +3185,122 @@ impl Designer {
             .gap_2()
             .child(
                 div()
+                    .text_sm()
+                    .text_color(rgb(0xffffff))
+                    .child("Flash Devices"),
+            )
+            .child(
+                div()
+                    .id("flash-toolbar")
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("flash-project-select")
+                            .relative()
+                            .child(
+                                div()
+                                    .id("flash-project-value")
+                                    .cursor_pointer()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .border_1()
+                                    .border_color(line)
+                                    .bg(if project_menu_open {
+                                        selected_bg
+                                    } else {
+                                        rgb(0x2d2d2d)
+                                    })
+                                    .text_xs()
+                                    .text_color(rgb(0xc0c0c0))
+                                    .child(format!("Project: {}", flash_project.label()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            if this.flash_busy {
+                                                return;
+                                            }
+                                            this.device_target_menu_open = None;
+                                            this.flash_project_menu_open =
+                                                !this.flash_project_menu_open;
+                                            this.focus_handle.focus(window);
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }),
+                                    ),
+                            )
+                            .when(project_menu_open, |row| {
+                                row.child(
+                                    div()
+                                        .id("flash-project-menu")
+                                        .absolute()
+                                        .top_full()
+                                        .left_0()
+                                        .mt_1()
+                                        .min_w(px(120.0))
+                                        .border_1()
+                                        .border_color(line)
+                                        .bg(rgb(0x2d2d2d))
+                                        .py_1()
+                                        .children(project_opts),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("flash-refresh")
+                            .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(if flash_busy {
+                                rgb(0x3a3a3a)
+                            } else {
+                                rgb(0x3a3a3a)
+                            })
+                            .hover(|s| {
+                                if flash_busy {
+                                    s
+                                } else {
+                                    s.bg(rgb(0x505050))
+                                }
+                            })
+                            .text_xs()
+                            .text_color(rgb(0xffffff))
+                            .child(if flash_busy { "Working…" } else { "Refresh" })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.refresh_flash_boards(cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .text_color(rgb(0xa0a0a0))
+                            .child(flash_status),
+                    ),
+            )
+            .child(
+                div()
+                    .id("flash-board-cards")
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_2()
+                    .children(board_els),
+            )
+            .child(
+                div()
+                    .mt_2()
                     .text_sm()
                     .text_color(rgb(0xffffff))
                     .child("Devices"),
@@ -3242,6 +3564,7 @@ impl Render for Designer {
                                         this.card_type_menu_open = None;
                                         this.timer_name_menu_open = None;
                                         this.device_target_menu_open = None;
+                                        this.flash_project_menu_open = false;
                                         this.view = AppView::Devices;
                                         this.menu_open = false;
                                         this.targets_sidebar = None;
@@ -3264,6 +3587,66 @@ impl Render for Designer {
                         ),
                 )
             })
+    }
+}
+
+fn firmware_dir(project: FlashProject) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(project.dir_name())
+}
+
+/// Build (if needed) then flash release firmware for `project` onto `port`.
+fn flash_firmware(project: FlashProject, port: &str, chip: Chip) -> String {
+    let dir = firmware_dir(project);
+    if !dir.join("Cargo.toml").is_file() {
+        return format!(
+            "Firmware project missing at {}.",
+            dir.display()
+        );
+    }
+    let fw = Framework::Hal;
+    let elf = elf_path(&dir, chip, fw);
+    if !elf.is_file() {
+        let mut cmd = build_command(&dir, chip, fw);
+        cmd.stdin(std::process::Stdio::null());
+        match cmd.output() {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                let tail = err.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+                return format!(
+                    "Build failed for {} / {}: {}",
+                    project.label(),
+                    chip.name(),
+                    if tail.is_empty() { out.status.to_string() } else { tail }
+                );
+            }
+            Err(e) => return format!("Failed to start build: {e}"),
+        }
+        if !elf.is_file() {
+            return format!("Build finished but ELF missing at {}.", elf.display());
+        }
+    }
+    let mut cmd = flash_command(&dir, chip, fw, Some(port));
+    cmd.stdin(std::process::Stdio::null());
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            format!("Flashed {} ({}) with {}.", port, chip.name(), project.label())
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let out_s = String::from_utf8_lossy(&out.stdout);
+            let text = if err.trim().is_empty() { out_s } else { err };
+            let tail = text.lines().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            format!(
+                "Flash failed on {}: {}",
+                port,
+                if tail.is_empty() { out.status.to_string() } else { tail }
+            )
+        }
+        Err(e) => format!("Failed to start espflash: {e}"),
     }
 }
 
@@ -3349,6 +3732,11 @@ fn main() {
                         event_card_name_edit: None,
                         timer_name_menu_open: None,
                         device_target_menu_open: None,
+                        flash_boards: Vec::new(),
+                        flash_project: FlashProject::Laser,
+                        flash_project_menu_open: false,
+                        flash_status: "Plug in a board and click Refresh.".to_string(),
+                        flash_busy: false,
                         cursor_ms: 0,
                         events: vec![],
                         devices: vec![DeviceCard {
