@@ -45,35 +45,47 @@ pub fn path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("devices.json"))
 }
 
+/// Parse devices.json text and apply key/type migrations.
+/// Returns `(devices, needs_save)` when the on-disk shape should be rewritten.
+pub fn parse_with_migrate(text: &str) -> Result<(Devices, bool), String> {
+    let mut v: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| e.to_string())?;
+    // Migrate the pre-0.8 `types` key to `device_types` (only when the file parses).
+    let migrate = v
+        .as_object()
+        .is_some_and(|o| o.contains_key("types") && !o.contains_key("device_types"));
+    if migrate && let Some(o) = v.as_object_mut() && let Some(t) = o.remove("types") {
+        o.insert("device_types".into(), t);
+    }
+    let mut d: Devices = serde_json::from_value(v).map_err(|e| e.to_string())?;
+    // Migrate the pre-0.11 `target` type to `target sensor` (order kept, duplicates dropped).
+    let renamed = d.device_types.iter().any(|t| t == "target");
+    if renamed {
+        let mut out: Vec<String> = Vec::new();
+        for t in d.device_types.drain(..) {
+            let t = if t == "target" {
+                "target sensor".to_string()
+            } else {
+                t
+            };
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+        d.device_types = out;
+    }
+    Ok((d, migrate || renamed))
+}
+
 /// Load devices.json, creating it with defaults if missing.
 /// `Err` means the file exists but is unreadable/broken; it must not be overwritten.
 pub fn load() -> Result<Devices, String> {
     let p = path().ok_or("no config dir ($HOME unset)")?;
     match std::fs::read_to_string(&p) {
         Ok(text) => {
-            let err = |e: serde_json::Error| format!("{}: {e}", p.display());
-            let mut v: serde_json::Value = serde_json::from_str(&text).map_err(err)?;
-            // Migrate the pre-0.8 `types` key to `device_types` (only when the file parses).
-            let migrate = v
-                .as_object()
-                .is_some_and(|o| o.contains_key("types") && !o.contains_key("device_types"));
-            if migrate && let Some(o) = v.as_object_mut() && let Some(t) = o.remove("types") {
-                o.insert("device_types".into(), t);
-            }
-            let mut d: Devices = serde_json::from_value(v).map_err(err)?;
-            // Migrate the pre-0.11 `target` type to `target sensor` (order kept, duplicates dropped).
-            let renamed = d.device_types.iter().any(|t| t == "target");
-            if renamed {
-                let mut out: Vec<String> = Vec::new();
-                for t in d.device_types.drain(..) {
-                    let t = if t == "target" { "target sensor".to_string() } else { t };
-                    if !out.contains(&t) {
-                        out.push(t);
-                    }
-                }
-                d.device_types = out;
-            }
-            if migrate || renamed {
+            let (d, needs_save) =
+                parse_with_migrate(&text).map_err(|e| format!("{}: {e}", p.display()))?;
+            if needs_save {
                 save(&d)?;
             }
             Ok(d)
@@ -142,5 +154,40 @@ mod tests {
         let json = serde_json::to_string_pretty(&d).unwrap();
         let back: Devices = serde_json::from_str(&json).unwrap();
         assert_eq!(back, d);
+    }
+
+    #[test]
+    fn parse_with_migrate_rewrites_types_key() {
+        let (d, needs_save) = parse_with_migrate(
+            r#"{"names":{},"enabled":{},"types":["laser","target sensor"]}"#,
+        )
+        .unwrap();
+        assert!(needs_save);
+        assert_eq!(d.device_types, ["laser", "target sensor"]);
+    }
+
+    #[test]
+    fn parse_with_migrate_renames_target_and_dedupes() {
+        let (d, needs_save) = parse_with_migrate(
+            r#"{"device_types":["laser","target","target sensor","target"]}"#,
+        )
+        .unwrap();
+        assert!(needs_save);
+        assert_eq!(d.device_types, ["laser", "target sensor"]);
+    }
+
+    #[test]
+    fn parse_with_migrate_noop_on_current_shape() {
+        let (d, needs_save) = parse_with_migrate(
+            r#"{"names":{},"enabled":{},"device_types":["laser","target sensor"]}"#,
+        )
+        .unwrap();
+        assert!(!needs_save);
+        assert_eq!(d.device_types, default_types());
+    }
+
+    #[test]
+    fn parse_with_migrate_rejects_invalid_json() {
+        assert!(parse_with_migrate("{not json").is_err());
     }
 }
