@@ -3182,7 +3182,7 @@ impl Designer {
                                         div()
                                             .text_xs()
                                             .text_color(rgb(0xa0a0a0))
-                                            .child("Project"),
+                                            .child("Type"),
                                     )
                                     .child(
                                         div()
