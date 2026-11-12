@@ -8,8 +8,8 @@ use base64::Engine;
 use gpui::{
     App, Application, Bounds, Context, Div, ElementId, FocusHandle, Image, ImageFormat,
     InteractiveElement, KeyBinding, KeyDownEvent, MouseButton, ObjectFit, PathBuilder,
-    PathPromptOptions, Stateful, Window, WindowBounds, WindowOptions, actions, canvas, div, img,
-    point, prelude::*, px, relative, rgb, size,
+    PathPromptOptions, PromptLevel, Stateful, Window, WindowBounds, WindowOptions, actions,
+    canvas, div, img, point, prelude::*, px, relative, rgb, size,
 };
 use serde::{Deserialize, Serialize};
 use utils::host::{Chip, Framework, build_command, detect_boards, elf_path, flash_command};
@@ -84,10 +84,12 @@ struct ProjectDocument {
     events: Vec<ProjectEvent>,
 }
 
-/// Stub device card for the Devices view (no real device logic yet).
+/// Device card for the Devices view.
 struct DeviceCard {
-    /// Selected layout Target cell name.
-    target_name: String,
+    /// Editable display name.
+    name: String,
+    /// Firmware project assigned to this device.
+    project: FlashProject,
 }
 
 /// Firmware project flashed onto USB boards from the Devices view.
@@ -227,8 +229,10 @@ struct Designer {
     event_card_name_edit: Option<(usize, usize, String)>,
     /// Open timer/target name select as (event_idx, card_idx), if any.
     timer_name_menu_open: Option<(usize, usize)>,
-    /// Open device target-name select as device index, if any.
-    device_target_menu_open: Option<usize>,
+    /// Inline name edit for a device card: (device_idx, draft).
+    device_name_edit: Option<(usize, String)>,
+    /// Open device project select as device index, if any.
+    device_project_menu_open: Option<usize>,
     /// USB boards detected for flashing.
     flash_boards: Vec<FlashBoard>,
     flash_project: FlashProject,
@@ -298,7 +302,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         self.flash_project_menu_open = false;
     }
 
@@ -327,6 +332,7 @@ impl Designer {
     fn commit_all_edits(&mut self, cx: &mut Context<Self>) {
         self.commit_pending_prop_edits(cx);
         self.commit_event_card_name_edit(cx);
+        self.commit_device_name_edit(cx);
         self.commit_duration_edit(cx);
         self.commit_event_time_edit(cx);
     }
@@ -688,6 +694,7 @@ impl Designer {
             || self.name_edit.is_some()
             || self.event_time_edit.is_some()
             || self.event_card_name_edit.is_some()
+            || self.device_name_edit.is_some()
     }
 
     /// Unique non-empty names from all Start Timer cards (order of first appearance).
@@ -810,6 +817,108 @@ impl Designer {
         cx.notify();
     }
 
+    fn apply_device_name_draft(&mut self) {
+        let Some((idx, draft)) = self.device_name_edit.clone() else {
+            return;
+        };
+        if let Some(device) = self.devices.get_mut(idx) {
+            device.name = draft;
+        }
+    }
+
+    fn commit_device_name_edit(&mut self, cx: &mut Context<Self>) {
+        self.apply_device_name_draft();
+        self.device_name_edit = None;
+        cx.notify();
+    }
+
+    /// Confirm then assign `project` on device `idx` and flash the first detected board.
+    fn request_device_project_change(
+        &mut self,
+        idx: usize,
+        project: FlashProject,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(device) = self.devices.get(idx) else {
+            return;
+        };
+        if device.project == project {
+            self.device_project_menu_open = None;
+            cx.notify();
+            return;
+        }
+        self.device_project_menu_open = None;
+        self.device_name_edit = None;
+        let label = if device.name.trim().is_empty() {
+            format!("Device {}", idx + 1)
+        } else {
+            device.name.clone()
+        };
+        let detail = format!(
+            "Flash \"{}\" with {} firmware?",
+            label,
+            project.label()
+        );
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Flash device?",
+            Some(&detail),
+            &["Flash", "Cancel"],
+            cx,
+        );
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let Ok(choice) = answer.await else {
+                return;
+            };
+            if choice != 0 {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Some(device) = this.devices.get_mut(idx) {
+                    device.project = project;
+                }
+                this.flash_with_project(project, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Flash the first detected USB board with `project` (shared by device-card confirm).
+    fn flash_with_project(&mut self, project: FlashProject, cx: &mut Context<Self>) {
+        if self.flash_busy {
+            return;
+        }
+        let Some(board) = self.flash_boards.first().cloned() else {
+            self.flash_status =
+                "No boards found. Plug in a device and Refresh.".to_string();
+            cx.notify();
+            return;
+        };
+        self.flash_busy = true;
+        self.flash_project_menu_open = false;
+        self.device_project_menu_open = None;
+        self.flash_status = format!(
+            "Flashing {} ({}) with {}…",
+            board.port,
+            board.chip.name(),
+            project.label()
+        );
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_spawn(async move { flash_firmware(project, &board.port, board.chip) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.flash_busy = false;
+                this.flash_status = status;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn event_ms(event: &Event) -> u32 {
         event.time.as_millis() as u32
     }
@@ -888,7 +997,8 @@ impl Designer {
             self.card_type_menu_open = None;
             self.event_card_name_edit = None;
             self.timer_name_menu_open = None;
-            self.device_target_menu_open = None;
+            self.device_name_edit = None;
+            self.device_project_menu_open = None;
             cx.notify();
             return;
         }
@@ -907,7 +1017,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         cx.notify();
     }
 
@@ -929,7 +1040,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         cx.notify();
     }
 
@@ -945,7 +1057,8 @@ impl Designer {
             self.card_type_menu_open = None;
             self.event_card_name_edit = None;
             self.timer_name_menu_open = None;
-            self.device_target_menu_open = None;
+            self.device_name_edit = None;
+            self.device_project_menu_open = None;
             cx.notify();
             return;
         }
@@ -955,7 +1068,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         cx.notify();
     }
 
@@ -970,7 +1084,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         self.event_time_edit = Some((idx, Self::format_position(t)));
         cx.notify();
     }
@@ -1072,6 +1187,35 @@ impl Designer {
             return;
         }
 
+        if self.device_name_edit.is_some() {
+            match key {
+                "enter" => self.commit_device_name_edit(cx),
+                "escape" => {
+                    self.commit_device_name_edit(cx);
+                }
+                "backspace" => {
+                    if let Some((_, draft)) = self.device_name_edit.as_mut() {
+                        draft.pop();
+                    }
+                    self.apply_device_name_draft();
+                    cx.notify();
+                }
+                _ => {
+                    if let Some(ch) = event.keystroke.key_char.as_deref() {
+                        if ch.chars().any(|c| !c.is_control()) {
+                            if let Some((_, draft)) = self.device_name_edit.as_mut() {
+                                draft.push_str(ch);
+                            }
+                            self.apply_device_name_draft();
+                            cx.notify();
+                        }
+                    }
+                }
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         if self.duration_edit.is_some() {
             match key {
                 "enter" => self.commit_duration_edit(cx),
@@ -1140,7 +1284,8 @@ impl Designer {
                 self.event_card_focused = None;
                 self.card_type_menu_open = None;
                 self.timer_name_menu_open = None;
-                self.device_target_menu_open = None;
+                self.device_name_edit = None;
+                self.device_project_menu_open = None;
                 cx.notify();
                 cx.stop_propagation();
                 return;
@@ -1149,14 +1294,15 @@ impl Designer {
 
         if key == "escape" && self.timer_name_menu_open.is_some() {
             self.timer_name_menu_open = None;
-            self.device_target_menu_open = None;
+            self.device_name_edit = None;
+            self.device_project_menu_open = None;
             cx.notify();
             cx.stop_propagation();
             return;
         }
 
-        if key == "escape" && self.device_target_menu_open.is_some() {
-            self.device_target_menu_open = None;
+        if key == "escape" && self.device_project_menu_open.is_some() {
+            self.device_project_menu_open = None;
             cx.notify();
             cx.stop_propagation();
             return;
@@ -1207,7 +1353,8 @@ impl Designer {
         self.card_type_menu_open = None;
         self.event_card_name_edit = None;
         self.timer_name_menu_open = None;
-        self.device_target_menu_open = None;
+        self.device_name_edit = None;
+        self.device_project_menu_open = None;
         cx.notify();
     }
 
@@ -1227,7 +1374,8 @@ impl Designer {
             self.event_card_focused = None;
             self.card_type_menu_open = None;
             self.timer_name_menu_open = None;
-            self.device_target_menu_open = None;
+            self.device_name_edit = None;
+            self.device_project_menu_open = None;
             cx.notify();
         }
     }
@@ -1247,7 +1395,8 @@ impl Designer {
             self.event_card_focused = None;
             self.card_type_menu_open = None;
             self.timer_name_menu_open = None;
-            self.device_target_menu_open = None;
+            self.device_name_edit = None;
+            self.device_project_menu_open = None;
             cx.notify();
         }
     }
@@ -2204,7 +2353,8 @@ impl Designer {
                                     }
                                     this.card_type_menu_open = None;
                                     this.timer_name_menu_open = None;
-                                    this.device_target_menu_open = None;
+                                    this.device_name_edit = None;
+                                    this.device_project_menu_open = None;
                                     if !matches!(ty, CardType::StartTimer)
                                         && matches!(
                                             this.event_card_name_edit.as_ref(),
@@ -2253,7 +2403,8 @@ impl Designer {
                                         card.name = name_for_set.clone();
                                     }
                                     this.timer_name_menu_open = None;
-                                    this.device_target_menu_open = None;
+                                    this.device_name_edit = None;
+                                    this.device_project_menu_open = None;
                                     cx.stop_propagation();
                                     cx.notify();
                                 }),
@@ -2386,7 +2537,8 @@ impl Designer {
                                         this.event_title_focused = None;
                                         this.event_card_focused = Some((i, card_i));
                                         this.timer_name_menu_open = None;
-                                        this.device_target_menu_open = None;
+                                        this.device_name_edit = None;
+                                        this.device_project_menu_open = None;
                                         this.card_type_menu_open =
                                             if this.card_type_menu_open == Some((i, card_i))
                                             {
@@ -2454,7 +2606,8 @@ impl Designer {
                                             this.event_card_focused = Some((i, card_i));
                                             this.card_type_menu_open = None;
                                             this.timer_name_menu_open = None;
-                                            this.device_target_menu_open = None;
+                                            this.device_name_edit = None;
+                                            this.device_project_menu_open = None;
                                             if this.event_card_name_edit.is_none()
                                                 || !matches!(
                                                     this.event_card_name_edit.as_ref(),
@@ -2749,7 +2902,8 @@ impl Designer {
                                 this.event_card_focused = Some((i, card_i));
                                 this.card_type_menu_open = None;
                                 this.timer_name_menu_open = None;
-                                this.device_target_menu_open = None;
+                                this.device_name_edit = None;
+                                this.device_project_menu_open = None;
                                 this.focus_handle.focus(window);
                                 cx.notify();
                                 cx.stop_propagation();
@@ -2803,7 +2957,8 @@ impl Designer {
                                     this.event_card_focused = None;
                                     this.card_type_menu_open = None;
                                     this.timer_name_menu_open = None;
-                                    this.device_target_menu_open = None;
+                                    this.device_name_edit = None;
+                                    this.device_project_menu_open = None;
                                     this.focus_handle.focus(window);
                                     cx.notify();
                                     cx.stop_propagation();
@@ -2832,7 +2987,8 @@ impl Designer {
                             this.event_time_edit = None;
                             this.card_type_menu_open = None;
                             this.timer_name_menu_open = None;
-                            this.device_target_menu_open = None;
+                            this.device_name_edit = None;
+                            this.device_project_menu_open = None;
                             this.focus_handle.focus(window);
                             cx.notify();
                         }),
@@ -2936,12 +3092,12 @@ impl Designer {
         let nested_card_bg = rgb(0x1e1e1e);
         let selected_bg = rgb(0x094771);
         let hover = rgb(0x3a3a3a);
-        let target_names = self.layout_target_names();
-        let menu_open_idx = self.device_target_menu_open;
         let flash_busy = self.flash_busy;
         let project_menu_open = self.flash_project_menu_open;
         let flash_project = self.flash_project;
         let flash_status = self.flash_status.clone();
+        let device_name_edit = self.device_name_edit.clone();
+        let device_project_menu_open = self.device_project_menu_open;
 
         let mut project_opts = Vec::new();
         for (opt_i, opt) in FlashProject::all().into_iter().enumerate() {
@@ -3036,21 +3192,30 @@ impl Designer {
 
         let mut card_els = Vec::new();
         for (i, device) in self.devices.iter().enumerate() {
-            let target_name = device.target_name.clone();
-            let name_label = if target_name.is_empty() {
+            let device_name = device.name.clone();
+            let device_project = device.project;
+            let editing_name = matches!(device_name_edit.as_ref(), Some((idx, _)) if *idx == i);
+            let name_label = if let Some((idx, draft)) = device_name_edit.as_ref() {
+                if *idx == i {
+                    draft.clone()
+                } else if device_name.is_empty() {
+                    "—".to_string()
+                } else {
+                    device_name.clone()
+                }
+            } else if device_name.is_empty() {
                 "—".to_string()
             } else {
-                target_name.clone()
+                device_name.clone()
             };
-            let menu_open = menu_open_idx == Some(i);
+            let project_menu_open_for_card = device_project_menu_open == Some(i);
 
-            let mut name_opts = Vec::new();
-            for (opt_i, opt_name) in target_names.iter().cloned().enumerate() {
-                let is_active = opt_name == target_name;
-                let name_for_set = opt_name.clone();
-                name_opts.push(
+            let mut project_opts = Vec::new();
+            for (opt_i, opt) in FlashProject::all().into_iter().enumerate() {
+                let is_active = opt == device_project;
+                project_opts.push(
                     div()
-                        .id(("device-target-name-opt", i as u64 * 100 + opt_i as u64))
+                        .id(("device-project-opt", i as u64 * 10 + opt_i as u64))
                         .cursor_pointer()
                         .px_3()
                         .py_1()
@@ -3058,16 +3223,12 @@ impl Designer {
                         .hover(|s| s.bg(hover))
                         .text_xs()
                         .text_color(rgb(0xc0c0c0))
-                        .child(opt_name)
+                        .child(opt.label())
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                if let Some(device) = this.devices.get_mut(i) {
-                                    device.target_name = name_for_set.clone();
-                                }
-                                this.device_target_menu_open = None;
+                            cx.listener(move |this, _, window, cx| {
+                                this.request_device_project_change(i, opt, window, cx);
                                 cx.stop_propagation();
-                                cx.notify();
                             }),
                         ),
                 );
@@ -3092,7 +3253,11 @@ impl Designer {
                         div()
                             .text_sm()
                             .text_color(rgb(0xffffff))
-                            .child(format!("Device {}", i + 1)),
+                            .child(if device_name.trim().is_empty() {
+                                format!("Device {}", i + 1)
+                            } else {
+                                device_name.clone()
+                            }),
                     )
                     .child(
                         div()
@@ -3105,10 +3270,10 @@ impl Designer {
                             .flex_col()
                             .child(
                                 div()
-                                    .id(("device-card-target-name-row", i))
+                                    .id(("device-card-name-row", i))
                                     .px_2()
                                     .py(px(2.0))
-                                    .bg(if menu_open {
+                                    .bg(if editing_name {
                                         selected_bg
                                     } else {
                                         rgb(0x252526)
@@ -3126,11 +3291,11 @@ impl Designer {
                                     )
                                     .child(
                                         div()
-                                            .id(("device-card-target-name-value", i))
+                                            .id(("device-card-name-value", i))
                                             .cursor_pointer()
                                             .min_w(px(48.0))
                                             .text_xs()
-                                            .text_color(if target_name.is_empty() {
+                                            .text_color(if device_name.is_empty() && !editing_name {
                                                 rgb(0x707070)
                                             } else {
                                                 rgb(0xc0c0c0)
@@ -3140,8 +3305,62 @@ impl Designer {
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
                                                     this.flash_project_menu_open = false;
-                                                    this.device_target_menu_open =
-                                                        if this.device_target_menu_open == Some(i)
+                                                    this.device_project_menu_open = None;
+                                                    this.commit_device_name_edit(cx);
+                                                    let current = this
+                                                        .devices
+                                                        .get(i)
+                                                        .map(|d| d.name.clone())
+                                                        .unwrap_or_default();
+                                                    this.device_name_edit = Some((i, current));
+                                                    this.focus_handle.focus(window);
+                                                    cx.stop_propagation();
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(("device-card-project-row", i))
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .border_t(px(1.0))
+                                    .border_color(line)
+                                    .bg(if project_menu_open_for_card {
+                                        selected_bg
+                                    } else {
+                                        rgb(0x252526)
+                                    })
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(0xa0a0a0))
+                                            .child("Project"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(("device-card-project-value", i))
+                                            .cursor_pointer()
+                                            .min_w(px(48.0))
+                                            .text_xs()
+                                            .text_color(rgb(0xc0c0c0))
+                                            .child(device_project.label())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    if this.flash_busy {
+                                                        return;
+                                                    }
+                                                    this.flash_project_menu_open = false;
+                                                    this.commit_device_name_edit(cx);
+                                                    this.device_project_menu_open =
+                                                        if this.device_project_menu_open == Some(i)
                                                         {
                                                             None
                                                         } else {
@@ -3154,16 +3373,16 @@ impl Designer {
                                             ),
                                     ),
                             )
-                            .when(menu_open, |row| {
+                            .when(project_menu_open_for_card, |row| {
                                 row.child(
                                     div()
-                                        .id(("device-target-name-select", i))
+                                        .id(("device-project-select", i))
                                         .w_full()
                                         .border_t(px(1.0))
                                         .border_color(line)
                                         .bg(rgb(0x2d2d2d))
                                         .py_1()
-                                        .children(name_opts),
+                                        .children(project_opts),
                                 )
                             }),
                     ),
@@ -3224,7 +3443,8 @@ impl Designer {
                                             if this.flash_busy {
                                                 return;
                                             }
-                                            this.device_target_menu_open = None;
+                                            this.device_name_edit = None;
+                                            this.device_project_menu_open = None;
                                             this.flash_project_menu_open =
                                                 !this.flash_project_menu_open;
                                             this.focus_handle.focus(window);
@@ -3514,7 +3734,8 @@ impl Render for Designer {
                                         this.event_card_focused = None;
                                         this.card_type_menu_open = None;
                                         this.timer_name_menu_open = None;
-                                        this.device_target_menu_open = None;
+                                        this.device_name_edit = None;
+                                        this.device_project_menu_open = None;
                                         this.view = AppView::Layout;
                                         this.menu_open = false;
                                         cx.notify();
@@ -3535,7 +3756,8 @@ impl Render for Designer {
                                     cx.listener(|this, _, _, cx| {
                                         this.commit_pending_prop_edits(cx);
                                         this.commit_event_card_name_edit(cx);
-                                        this.device_target_menu_open = None;
+                                        this.device_name_edit = None;
+                                        this.device_project_menu_open = None;
                                         this.view = AppView::Events;
                                         this.menu_open = false;
                                         this.targets_sidebar = None;
@@ -3563,7 +3785,8 @@ impl Render for Designer {
                                         this.event_card_focused = None;
                                         this.card_type_menu_open = None;
                                         this.timer_name_menu_open = None;
-                                        this.device_target_menu_open = None;
+                                        this.device_name_edit = None;
+                                        this.device_project_menu_open = None;
                                         this.flash_project_menu_open = false;
                                         this.view = AppView::Devices;
                                         this.menu_open = false;
@@ -3732,7 +3955,8 @@ fn main() {
                         card_type_menu_open: None,
                         event_card_name_edit: None,
                         timer_name_menu_open: None,
-                        device_target_menu_open: None,
+                        device_name_edit: None,
+                        device_project_menu_open: None,
                         flash_boards: Vec::new(),
                         flash_project: FlashProject::Laser,
                         flash_project_menu_open: false,
@@ -3741,7 +3965,8 @@ fn main() {
                         cursor_ms: 0,
                         events: vec![],
                         devices: vec![DeviceCard {
-                            target_name: String::new(),
+                            name: String::new(),
+                            project: FlashProject::Laser,
                         }],
                         focus_handle,
                     }
