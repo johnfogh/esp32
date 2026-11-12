@@ -836,4 +836,178 @@ mod tests {
         let (_, mm_left) = create_target_overlay(&doc, 1.0, 4.0).unwrap();
         near(mm_left, 10.0);
     }
+
+    #[test]
+    fn next_color_picks_least_used_lowest_index() {
+        assert_eq!(next_color([], 3), 0);
+        assert_eq!(next_color([0, 0, 1], 3), 2);
+        assert_eq!(next_color([0, 1, 2], 3), 0);
+        assert_eq!(next_color([0, 1, 0, 1, 2], 3), 2);
+        assert_eq!(next_color([5], 3), 0); // 5 % 3 == 2 → counts slot 2
+        assert_eq!(next_color([0], 0), 0); // n.max(1)
+    }
+
+    #[test]
+    fn area_and_contains_square() {
+        let sq = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)];
+        near(area(&sq), 8.0);
+        assert_eq!(area(&[]), 0.0);
+        assert_eq!(area(&[(0.0, 0.0), (1.0, 0.0)]), 0.0);
+        assert!(contains(&sq, 1.0, 1.0));
+        assert!(!contains(&sq, 5.0, 1.0));
+        assert!(!contains(&[(0.0, 0.0)], 0.0, 0.0));
+    }
+
+    #[test]
+    fn hit_poly_topmost_and_smallest() {
+        let polys = vec![
+            Zone {
+                name: "outer".into(),
+                points: vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
+                color: 0,
+                score: 0,
+                hidden: false,
+            },
+            Zone {
+                name: "inner".into(),
+                points: vec![(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0)],
+                color: 1,
+                score: 0,
+                hidden: false,
+            },
+            Zone {
+                name: "hidden".into(),
+                points: vec![(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)],
+                color: 2,
+                score: 0,
+                hidden: true,
+            },
+        ];
+        assert_eq!(hit_poly(&polys, 5.0, 5.0), Some(1));
+        assert_eq!(hit_poly(&polys, 1.0, 1.0), Some(0));
+        assert_eq!(hit_poly(&polys, 20.0, 20.0), None);
+        assert_eq!(hit_poly_smallest(&polys, 5.0, 5.0), Some(1));
+        assert_eq!(hit_poly_smallest(&polys, 1.0, 1.0), Some(0));
+    }
+
+    #[test]
+    fn encode_image_and_image_size_bytes() {
+        let doc = tiny_png_doc(10.0, 8.0, (16, 12));
+        let bytes = STANDARD.decode(doc.image.trim()).unwrap();
+        assert_eq!(image_size_bytes(&bytes).unwrap(), (16, 12));
+        assert_eq!(encode_image(&bytes), doc.image);
+        assert!(image_size_bytes(b"not-an-image").is_err());
+    }
+
+    #[test]
+    fn json_path_for_replaces_extension() {
+        assert_eq!(
+            json_path_for(Path::new("/tmp/plate.png")),
+            PathBuf::from("/tmp/plate.json")
+        );
+        assert_eq!(
+            json_path_for(Path::new("plate")),
+            PathBuf::from("plate.json")
+        );
+    }
+
+    #[test]
+    fn to_json_from_json_roundtrip_and_target_to_json() {
+        let polys = vec![Zone {
+            name: "A".into(),
+            points: vec![(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)],
+            color: 2,
+            score: 5,
+            hidden: false,
+        }];
+        let doc = to_json("img".into(), (100, 50), 10.0, 5.0, Unit::Cm, &polys);
+        assert!((doc.length_cm - 10.0).abs() < 1e-9);
+        assert!((doc.width_cm - 5.0).abs() < 1e-9);
+        assert_eq!(doc.display_units, Some(Unit::Cm));
+        assert_eq!(doc.zones.len(), 1);
+        assert!((doc.zones[0].points[1][0] - 10.0).abs() < 1e-9);
+        assert!((doc.zones[0].points[2][1] - 5.0).abs() < 1e-9);
+
+        let back = from_json(&doc, (100, 50));
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].name, "A");
+        assert_eq!(back[0].color, 2);
+        assert_eq!(back[0].score, 5);
+        near(back[0].points[1].0, 100.0);
+        near(back[0].points[2].1, 50.0);
+
+        let uncolored = JsonDoc {
+            image: String::new(),
+            length_cm: 10.0,
+            width_cm: 10.0,
+            display_units: None,
+            zones: vec![
+                JsonZone {
+                    name: "x".into(),
+                    color: None,
+                    score: 0,
+                    hidden: false,
+                    points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+                },
+                JsonZone {
+                    name: "y".into(),
+                    color: None,
+                    score: 0,
+                    hidden: false,
+                    points: vec![[2.0, 2.0], [3.0, 2.0], [3.0, 3.0]],
+                },
+            ],
+        };
+        let filled = from_json(&uncolored, (10, 10));
+        assert_eq!(filled[0].color, 0);
+        assert_eq!(filled[1].color, 1);
+
+        let t = Target::from_cm(doc.clone());
+        let pretty = target_to_json(&t).unwrap();
+        assert!(pretty.ends_with('\n'));
+        let parsed: JsonDoc = serde_json::from_str(pretty.trim_end()).unwrap();
+        assert_eq!(parsed.zones[0].name, "A");
+    }
+
+    #[test]
+    fn load_image_field_base64_and_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "targetlib-img-{}-{}",
+            std::process::id(),
+            "field"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let doc = tiny_png_doc(1.0, 1.0, (2, 2));
+        let (bytes, name) = load_image_field(&doc.image, &dir).unwrap();
+        assert_eq!(name, "image");
+        assert_eq!(image_size_bytes(&bytes).unwrap(), (2, 2));
+
+        let file = dir.join("shot.png");
+        std::fs::write(&file, &bytes).unwrap();
+        let (from_path, pname) = load_image_field("shot.png", &dir).unwrap();
+        assert_eq!(pname, "shot.png");
+        assert_eq!(from_path, bytes);
+        assert!(load_image_field("!!!", &dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_and_save_target_def_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "targetlib-def-{}-{}",
+            std::process::id(),
+            "io"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("plate.json");
+        let doc = tiny_png_doc(20.0, 10.0, (40, 20));
+        save_target_def(&path, &doc).unwrap();
+        let loaded = open_target_def(&path).unwrap();
+        assert!((loaded.length_cm - 20.0).abs() < 1e-9);
+        assert!((loaded.width_cm - 10.0).abs() < 1e-9);
+        assert_eq!(image_size_bytes(&STANDARD.decode(loaded.image.trim()).unwrap()).unwrap(), (40, 20));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
