@@ -234,10 +234,15 @@ mod tests {
         assert_eq!(Chip::ALL.len(), 6);
         assert_eq!(Chip::Esp32c3.feature(), "esp32c3");
         assert_eq!(Chip::Esp32s3.name(), "ESP32-S3");
+        assert_eq!(format!("{}", Chip::Esp32c6), "ESP32-C6");
         assert_eq!(Chip::Esp32.target_triple(Framework::Hal), "xtensa-esp32-none-elf");
         assert_eq!(Chip::Esp32c3.target_triple(Framework::Hal), "riscv32imc-unknown-none-elf");
         assert_eq!(Chip::Esp32c6.target_triple(Framework::Hal), "riscv32imac-unknown-none-elf");
         assert_eq!(Chip::Esp32c3.target_triple(Framework::Idf), "riscv32imc-esp-espidf");
+        assert_eq!(Chip::Esp32.target_triple(Framework::Idf), "xtensa-esp32-espidf");
+        assert_eq!(Chip::Esp32s2.target_triple(Framework::Idf), "xtensa-esp32s2-espidf");
+        assert_eq!(Chip::Esp32s3.target_triple(Framework::Idf), "xtensa-esp32s3-espidf");
+        assert_eq!(Chip::Esp32h2.target_triple(Framework::Idf), "riscv32imac-esp-espidf");
         for c in Chip::ALL {
             let xtensa = matches!(c, Chip::Esp32 | Chip::Esp32s2 | Chip::Esp32s3);
             assert_eq!(xtensa, c.target_triple(Framework::Hal).starts_with("xtensa"));

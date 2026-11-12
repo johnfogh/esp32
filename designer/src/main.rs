@@ -28,7 +28,7 @@ actions!(
 
 actions!(file, [OpenFile, SaveFile, SaveFileAs]);
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum CardType {
     Activate,
@@ -3933,5 +3933,46 @@ mod tests {
         assert!(card.name.is_empty());
         assert_eq!(card.project, FlashProject::Laser);
         assert_ne!(card.project, FlashProject::Sensor);
+    }
+
+    #[test]
+    fn card_type_labels_and_all() {
+        assert_eq!(CardType::Activate.label(), "Activate");
+        assert_eq!(CardType::Deactivate.label(), "Deactivate");
+        assert_eq!(CardType::StartTimer.label(), "Start Timer");
+        assert_eq!(CardType::StopTimer.label(), "Stop Timer");
+        assert_eq!(
+            CardType::all(),
+            [
+                CardType::Activate,
+                CardType::Deactivate,
+                CardType::StartTimer,
+                CardType::StopTimer,
+            ]
+        );
+    }
+
+    #[test]
+    fn length_unit_labels_and_all() {
+        assert_eq!(LengthUnit::Inches.label(), "inches");
+        assert_eq!(LengthUnit::Feet.label(), "feet");
+        assert_eq!(LengthUnit::Yards.label(), "yard");
+        assert_eq!(LengthUnit::Centimeters.label(), "centimeters");
+        assert_eq!(LengthUnit::Meters.label(), "meters");
+        assert_eq!(LengthUnit::all().len(), 5);
+    }
+
+    #[test]
+    fn cell_kind_label_and_empty() {
+        assert!(CellKind::Empty.is_empty());
+        assert_eq!(CellKind::Empty.label(), None);
+        assert!(!CellKind::default_connector().is_empty());
+        assert_eq!(CellKind::default_connector().label(), None);
+        let target = CellKind::Target {
+            def: "plate".into(),
+            name: "A1".into(),
+        };
+        assert!(!target.is_empty());
+        assert_eq!(target.label(), Some("A1"));
     }
 }

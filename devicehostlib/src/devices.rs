@@ -104,3 +104,43 @@ pub fn write_atomic(p: &Path, text: &str) -> Result<(), String> {
     std::fs::write(&tmp, format!("{text}\n")).map_err(|e| format!("{}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, p).map_err(|e| format!("{}: {e}", p.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_devices_include_laser_and_target_sensor() {
+        assert_eq!(default_types(), ["laser", "target sensor"]);
+        let d = Devices::default();
+        assert!(d.names.is_empty());
+        assert!(d.enabled.is_empty());
+        assert_eq!(d.device_types, default_types());
+    }
+
+    #[test]
+    fn write_atomic_creates_parent_and_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "devicehostlib-devices-{}-{}",
+            std::process::id(),
+            "atomic"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("devices.json");
+        write_atomic(&path, r#"{"ok":true}"#).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "{\"ok\":true}\n");
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn devices_json_roundtrip_preserves_maps() {
+        let mut d = Devices::default();
+        d.names.insert("aa:bb".into(), "Gate".into());
+        d.enabled.insert("aa:bb".into(), true);
+        let json = serde_json::to_string_pretty(&d).unwrap();
+        let back: Devices = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, d);
+    }
+}

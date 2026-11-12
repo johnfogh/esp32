@@ -2,3 +2,4 @@
 *.bin
 .embuild/
 .codebase-index/
+/.codebase-index

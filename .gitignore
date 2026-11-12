@@ -15,3 +15,4 @@ work.md
 *.swp
 *~
 .DS_Store
+/.codebase-index

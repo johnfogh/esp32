@@ -132,3 +132,59 @@ pub fn manufacturer_payload(mac: [u8; 6]) -> [u8; 8] {
 pub fn parse_manufacturer_mac(data: &[u8]) -> Option<[u8; 6]> {
     data.get(..6)?.try_into().ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_roundtrip_with_and_without_rssi() {
+        let encoded = encode_status(1_234_567, Some(-42));
+        assert_eq!(encoded.len(), STATUS_LEN);
+        assert_eq!(parse_status(&encoded), Some((1_234_567, Some(-42))));
+
+        let unknown = encode_status(0, None);
+        assert_eq!(unknown[8], RSSI_UNKNOWN as u8);
+        assert_eq!(parse_status(&unknown), Some((0, None)));
+
+        assert_eq!(parse_status(&[]), None);
+        assert_eq!(parse_status(&[0; 8]), None);
+    }
+
+    #[test]
+    fn device_name_formats_and_truncates() {
+        let mac = [0x11, 0x22, 0x33, 0xaa, 0xbb, 0xcc];
+        let name = device_name("laser", mac);
+        assert_eq!(name.as_str(), "laser-aabbcc");
+        assert_eq!(name.as_bytes(), b"laser-aabbcc");
+
+        let empty = device_name("", mac);
+        assert_eq!(empty.as_str(), "esp32-aabbcc");
+
+        let long = "x".repeat(PROJECT_MAX + 8);
+        let truncated = device_name(&long, mac);
+        assert_eq!(truncated.as_bytes().len(), NAME_MAX);
+        assert!(truncated.as_str().ends_with("-aabbcc"));
+        assert_eq!(truncated.as_str().len(), PROJECT_MAX + 7);
+    }
+
+    #[test]
+    fn parse_name_accepts_hex_suffix() {
+        assert_eq!(parse_name("laser-a1b2c3"), Some(("laser", "a1b2c3")));
+        assert_eq!(parse_name("sensor-AABBCC"), Some(("sensor", "AABBCC")));
+        assert_eq!(parse_name("-aabbcc"), None);
+        assert_eq!(parse_name("laser-gg0000"), None);
+        assert_eq!(parse_name("laser-a1b2c"), None);
+        assert_eq!(parse_name("nodaashere"), None);
+    }
+
+    #[test]
+    fn manufacturer_payload_and_mac_parse() {
+        let mac = [1, 2, 3, 4, 5, 6];
+        let payload = manufacturer_payload(mac);
+        assert_eq!(&payload[..2], &COMPANY_ID.to_le_bytes());
+        assert_eq!(&payload[2..], &mac);
+        assert_eq!(parse_manufacturer_mac(&mac), Some(mac));
+        assert_eq!(parse_manufacturer_mac(&[1, 2, 3, 4, 5]), None);
+    }
+}

@@ -805,6 +805,23 @@ mod tests {
     }
 
     #[test]
+    fn unit_label_and_cm_conversion() {
+        assert_eq!(Unit::Cm.label(), "cm");
+        assert_eq!(Unit::In.label(), "in");
+        assert!((Unit::Cm.to_cm(3.0) - 3.0).abs() < 1e-9);
+        assert!((Unit::In.to_cm(1.0) - CM_PER_IN).abs() < 1e-9);
+        assert!((Unit::Cm.cm_to(5.0) - 5.0).abs() < 1e-9);
+        assert!((Unit::In.cm_to(CM_PER_IN) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn poly_color_wraps_palette() {
+        assert_eq!(poly_color(0), PALETTE[0]);
+        assert_eq!(poly_color(PALETTE.len()), PALETTE[0]);
+        assert_eq!(poly_color(PALETTE.len() + 3), PALETTE[3]);
+    }
+
+    #[test]
     fn create_target_overlay_marker_and_distance() {
         let doc = tiny_png_doc(10.0, 8.0, (100, 80));
         let (out, mm) = create_target_overlay(&doc, 5.0, 4.0).unwrap();
