@@ -3182,7 +3182,7 @@ impl Designer {
                                         div()
                                             .text_xs()
                                             .text_color(rgb(0xa0a0a0))
-                                            .child("Type"),
+                                            .child(device_card_type_row_label()),
                                     )
                                     .child(
                                         div()
@@ -3541,6 +3541,11 @@ impl Render for Designer {
                 )
             })
     }
+}
+
+/// Property-row label on a Devices card for the assigned firmware project (device type).
+fn device_card_type_row_label() -> &'static str {
+    "Type"
 }
 
 /// Card header / confirm label: empty or whitespace names fall back to `Device {idx+1}`.
@@ -3933,6 +3938,11 @@ mod tests {
         assert!(card.name.is_empty());
         assert_eq!(card.project, FlashProject::Laser);
         assert_ne!(card.project, FlashProject::Sensor);
+    }
+
+    #[test]
+    fn device_card_type_row_label_is_type() {
+        assert_eq!(device_card_type_row_label(), "Type");
     }
 
     #[test]
