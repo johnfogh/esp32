@@ -850,16 +850,7 @@ impl Designer {
         }
         self.device_project_menu_open = None;
         self.device_name_edit = None;
-        let label = if device.name.trim().is_empty() {
-            format!("Device {}", idx + 1)
-        } else {
-            device.name.clone()
-        };
-        let detail = format!(
-            "Flash \"{}\" with {} firmware?",
-            label,
-            project.label()
-        );
+        let detail = device_flash_confirm_detail(&device.name, idx, project);
         let answer = window.prompt(
             PromptLevel::Warning,
             "Flash device?",
@@ -891,8 +882,7 @@ impl Designer {
             return;
         }
         let Some(board) = self.flash_boards.first().cloned() else {
-            self.flash_status =
-                "No boards found. Plug in a device and Refresh.".to_string();
+            self.flash_status = no_boards_flash_status().to_string();
             cx.notify();
             return;
         };
@@ -3195,19 +3185,11 @@ impl Designer {
             let device_name = device.name.clone();
             let device_project = device.project;
             let editing_name = matches!(device_name_edit.as_ref(), Some((idx, _)) if *idx == i);
-            let name_label = if let Some((idx, draft)) = device_name_edit.as_ref() {
-                if *idx == i {
-                    draft.clone()
-                } else if device_name.is_empty() {
-                    "—".to_string()
-                } else {
-                    device_name.clone()
-                }
-            } else if device_name.is_empty() {
-                "—".to_string()
-            } else {
-                device_name.clone()
-            };
+            let editing_draft = device_name_edit
+                .as_ref()
+                .filter(|(idx, _)| *idx == i)
+                .map(|(_, draft)| draft.as_str());
+            let name_label = device_name_field_label(&device_name, editing_draft);
             let project_menu_open_for_card = device_project_menu_open == Some(i);
 
             let mut project_opts = Vec::new();
@@ -3253,11 +3235,7 @@ impl Designer {
                         div()
                             .text_sm()
                             .text_color(rgb(0xffffff))
-                            .child(if device_name.trim().is_empty() {
-                                format!("Device {}", i + 1)
-                            } else {
-                                device_name.clone()
-                            }),
+                            .child(device_card_title(&device_name, i)),
                     )
                     .child(
                         div()
@@ -3813,6 +3791,40 @@ impl Render for Designer {
     }
 }
 
+/// Card header / confirm label: empty or whitespace names fall back to `Device {idx+1}`.
+fn device_card_title(name: &str, idx: usize) -> String {
+    if name.trim().is_empty() {
+        format!("Device {}", idx + 1)
+    } else {
+        name.to_string()
+    }
+}
+
+/// Name field text: live draft while editing, else stored name or an em dash placeholder.
+fn device_name_field_label(name: &str, editing_draft: Option<&str>) -> String {
+    if let Some(draft) = editing_draft {
+        draft.to_string()
+    } else if name.is_empty() {
+        "—".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Confirmation dialog body for a device project change that will flash firmware.
+fn device_flash_confirm_detail(name: &str, idx: usize, project: FlashProject) -> String {
+    format!(
+        "Flash \"{}\" with {} firmware?",
+        device_card_title(name, idx),
+        project.label()
+    )
+}
+
+/// Status when flash is requested with no detected USB boards.
+fn no_boards_flash_status() -> &'static str {
+    "No boards found. Plug in a device and Refresh."
+}
+
 fn firmware_dir(project: FlashProject) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -4090,5 +4102,51 @@ mod tests {
             format!("Firmware project missing at {}.", missing.display())
         );
         let _ = std::fs::remove_dir_all(&missing);
+    }
+
+    #[test]
+    fn device_card_title_falls_back_when_name_blank() {
+        assert_eq!(device_card_title("", 0), "Device 1");
+        assert_eq!(device_card_title("   ", 2), "Device 3");
+        assert_eq!(device_card_title("Alpha", 0), "Alpha");
+    }
+
+    #[test]
+    fn device_name_field_label_prefers_draft_then_name_then_dash() {
+        assert_eq!(device_name_field_label("stored", Some("draft")), "draft");
+        assert_eq!(device_name_field_label("", Some("")), "");
+        assert_eq!(device_name_field_label("stored", None), "stored");
+        assert_eq!(device_name_field_label("", None), "—");
+    }
+
+    #[test]
+    fn device_flash_confirm_detail_uses_title_and_project_label() {
+        assert_eq!(
+            device_flash_confirm_detail("", 0, FlashProject::Sensor),
+            "Flash \"Device 1\" with Sensor firmware?"
+        );
+        assert_eq!(
+            device_flash_confirm_detail("Gate A", 4, FlashProject::Laser),
+            "Flash \"Gate A\" with Laser firmware?"
+        );
+    }
+
+    #[test]
+    fn no_boards_flash_status_asks_to_refresh() {
+        assert_eq!(
+            no_boards_flash_status(),
+            "No boards found. Plug in a device and Refresh."
+        );
+    }
+
+    #[test]
+    fn device_card_defaults_to_empty_name_and_laser() {
+        let card = DeviceCard {
+            name: String::new(),
+            project: FlashProject::Laser,
+        };
+        assert!(card.name.is_empty());
+        assert_eq!(card.project, FlashProject::Laser);
+        assert_ne!(card.project, FlashProject::Sensor);
     }
 }
