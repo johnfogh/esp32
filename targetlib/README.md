@@ -6,7 +6,7 @@ Rust library for `target_def` JSON files (zones over a target image).
 targetlib = { path = "../targetlib" }
 ```
 
-`dir()` is `targets_folder` from `~/.config/target-editor/config.json`, else `~/dev/esp32/target_defs`.
+`dir()` is `~/dev/esp32/target_defs`.
 `open_target_def(path)` / `save_target_def(path, doc)` read and write a `target_def` JSON file.
 `save_target_def` pretty-prints with a trailing newline, appends `.json` if needed, creates the
 parent folder, and embeds `image` as base64 when the field is still a relative path.

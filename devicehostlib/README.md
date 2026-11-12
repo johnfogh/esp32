@@ -1,6 +1,6 @@
 # devicehostlib
 
-Host-side device stack for `target-editor`: OS-paired BlueZ GATT (`central`),
+Host-side device stack: OS-paired BlueZ GATT (`central`),
 `devices.json`, virtual Hub/Board sensors, in-process/Unix attach, and status-buffer protocol.
 
 Origin: https://github.com/johnfogh/esp32-devicehostlib.git

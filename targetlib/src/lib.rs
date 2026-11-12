@@ -475,29 +475,9 @@ fn expand_path(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn config_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"));
-    base.join("target-editor").join("config.json")
-}
-
-/// Folder of `target_def` JSON files. Uses `targets_folder` from
-/// `~/.config/target-editor/config.json` when set, else `~/dev/esp32/target_defs`.
+/// Folder of `target_def` JSON files: `~/dev/esp32/target_defs`.
 pub fn dir() -> PathBuf {
-    let default = expand_path("~/dev/esp32/target_defs");
-    let Ok(text) = std::fs::read_to_string(config_path()) else {
-        return default;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return default;
-    };
-    match v.get("targets_folder").and_then(|x| x.as_str()) {
-        Some(s) if !s.is_empty() => expand_path(s),
-        _ => default,
-    }
+    expand_path("~/dev/esp32/target_defs")
 }
 
 pub fn path_for(stem: &str) -> PathBuf {
