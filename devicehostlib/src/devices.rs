@@ -190,4 +190,24 @@ mod tests {
     fn parse_with_migrate_rejects_invalid_json() {
         assert!(parse_with_migrate("{not json").is_err());
     }
+
+    #[test]
+    fn parse_with_migrate_applies_types_key_and_target_rename() {
+        let (d, needs_save) = parse_with_migrate(
+            r#"{"names":{},"enabled":{},"types":["laser","target","target sensor"]}"#,
+        )
+        .unwrap();
+        assert!(needs_save);
+        assert_eq!(d.device_types, ["laser", "target sensor"]);
+    }
+
+    #[test]
+    fn parse_with_migrate_keeps_device_types_when_types_also_present() {
+        let (d, needs_save) = parse_with_migrate(
+            r#"{"device_types":["laser","target sensor"],"types":["ignored"]}"#,
+        )
+        .unwrap();
+        assert!(!needs_save);
+        assert_eq!(d.device_types, ["laser", "target sensor"]);
+    }
 }
