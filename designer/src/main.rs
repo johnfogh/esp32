@@ -3599,17 +3599,18 @@ fn firmware_dir(project: FlashProject) -> PathBuf {
 
 /// Build (if needed) then flash release firmware for `project` onto `port`.
 fn flash_firmware(project: FlashProject, port: &str, chip: Chip) -> String {
-    let dir = firmware_dir(project);
+    flash_firmware_at(&firmware_dir(project), project, port, chip)
+}
+
+/// Same as [`flash_firmware`], but uses an explicit project directory (for tests).
+fn flash_firmware_at(dir: &Path, project: FlashProject, port: &str, chip: Chip) -> String {
     if !dir.join("Cargo.toml").is_file() {
-        return format!(
-            "Firmware project missing at {}.",
-            dir.display()
-        );
+        return format!("Firmware project missing at {}.", dir.display());
     }
     let fw = Framework::Hal;
-    let elf = elf_path(&dir, chip, fw);
+    let elf = elf_path(dir, chip, fw);
     if !elf.is_file() {
-        let mut cmd = build_command(&dir, chip, fw);
+        let mut cmd = build_command(dir, chip, fw);
         cmd.stdin(std::process::Stdio::null());
         match cmd.output() {
             Ok(out) if out.status.success() => {}
@@ -3629,7 +3630,7 @@ fn flash_firmware(project: FlashProject, port: &str, chip: Chip) -> String {
             return format!("Build finished but ELF missing at {}.", elf.display());
         }
     }
-    let mut cmd = flash_command(&dir, chip, fw, Some(port));
+    let mut cmd = flash_command(dir, chip, fw, Some(port));
     cmd.stdin(std::process::Stdio::null());
     match cmd.output() {
         Ok(out) if out.status.success() => {
@@ -3814,5 +3815,55 @@ mod tests {
         assert!(!card_type_button_disabled(CardType::Deactivate, true, false));
         assert!(card_type_button_disabled(CardType::StopTimer, true, false));
         assert!(!card_type_button_disabled(CardType::StopTimer, false, true));
+    }
+
+    #[test]
+    fn flash_project_labels_dirs_and_all() {
+        assert_eq!(FlashProject::Laser.label(), "Laser");
+        assert_eq!(FlashProject::Sensor.label(), "Sensor");
+        assert_eq!(FlashProject::Laser.dir_name(), "laser");
+        assert_eq!(FlashProject::Sensor.dir_name(), "sensor");
+        assert_eq!(
+            FlashProject::all(),
+            [FlashProject::Laser, FlashProject::Sensor]
+        );
+    }
+
+    #[test]
+    fn firmware_dir_points_at_monorepo_siblings_with_cargo_toml() {
+        let designer_parent = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("designer has a parent")
+            .to_path_buf();
+        for project in FlashProject::all() {
+            let dir = firmware_dir(project);
+            assert_eq!(dir, designer_parent.join(project.dir_name()));
+            assert!(
+                dir.join("Cargo.toml").is_file(),
+                "expected Cargo.toml under {}",
+                dir.display()
+            );
+        }
+    }
+
+    #[test]
+    fn flash_firmware_at_reports_missing_project() {
+        let missing = std::env::temp_dir().join(format!(
+            "designer-flash-missing-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        std::fs::create_dir_all(&missing).unwrap();
+        let msg = flash_firmware_at(
+            &missing,
+            FlashProject::Laser,
+            "/dev/ttyUSB0",
+            Chip::Esp32c3,
+        );
+        assert_eq!(
+            msg,
+            format!("Firmware project missing at {}.", missing.display())
+        );
+        let _ = std::fs::remove_dir_all(&missing);
     }
 }
