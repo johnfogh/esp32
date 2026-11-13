@@ -274,3 +274,45 @@ mod imp {
 
 /// Start the status screen thread (see the module docs). `Err` when unsupported in this build.
 pub fn start(project: &'static str) -> Result<(), &'static str> { imp::start(project) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn lock_grid() -> std::sync::MutexGuard<'static, ()> {
+        static G: Mutex<()> = Mutex::new(());
+        G.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn reset_grid() {
+        for slot in GRID_VALUES.iter() {
+            slot.store(0, Ordering::Relaxed);
+        }
+        GRID_ON.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn grid_values_none_until_set() {
+        let _g = lock_grid();
+        reset_grid();
+        assert_eq!(grid_values(), None);
+        set_grid_values([111, 222, 333, 444]);
+        assert_eq!(grid_values(), Some([111, 222, 333, 444]));
+    }
+
+    #[test]
+    fn set_grid_values_overwrites() {
+        let _g = lock_grid();
+        reset_grid();
+        set_grid_values([1, 2, 3, 4]);
+        set_grid_values([10, 20, 30, 40]);
+        assert_eq!(grid_values(), Some([10, 20, 30, 40]));
+    }
+
+    #[test]
+    fn start_unsupported_without_display_hal_s3() {
+        // Host / non-display builds use the stub `imp`.
+        assert!(start("sensor").is_err());
+    }
+}
