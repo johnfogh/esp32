@@ -149,7 +149,8 @@ pub mod readings;
 #[cfg(any(feature = "hal", feature = "idf"))]
 pub use status::{buffer_add, buffer_add_sample, send_buffer, synced_time};
 /// Status screen (Waveshare ESP32-S3-Touch-LCD-2), feature `display`.
-#[cfg(any(feature = "hal", feature = "idf"))]
+/// Also compiled under `host` so [`display::set_grid_values`] and unit tests are available.
+#[cfg(any(feature = "hal", feature = "idf", feature = "host"))]
 pub mod display;
 /// Board output over BLE ([`ble_log`], `log` mirroring).
 #[cfg(any(feature = "hal", feature = "idf"))]
