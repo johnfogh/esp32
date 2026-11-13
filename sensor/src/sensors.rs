@@ -1,8 +1,8 @@
 //! Four corner piezos (TL, TR, BL, BR): ADC pins, thresholded hit buffer.
 //!
 //! Logic lives in [`SensorArray`] / [`HitBuffer`] (validator/reader injected) so it can be
-//! unit-tested on the host. Device globals: [`init_sensors`], [`scan_sensors`], [`push_hits`],
-//! [`set_threshold`], [`set_name`], [`write_buffer_json`].
+//! unit-tested on the host. Device globals: [`init_sensors`], [`poll_sensors`], [`last_values`],
+//! [`push_hits`], [`set_threshold`], [`set_name`], [`write_buffer_json`].
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
@@ -175,20 +175,30 @@ impl SensorArray {
         &self.pins
     }
 
-    /// Read each configured pin; return a sample only when every corner is `>= threshold`.
-    pub fn read_hits(&self, threshold: u16, mut read: impl FnMut(u8) -> u16) -> Sample {
-        if self.pins.len() < CAPACITY {
-            return Sample::new();
-        }
+    /// Read every configured pin into a fixed `[u16; CAPACITY]` (unset slots stay 0).
+    pub fn read_all(&self, mut read: impl FnMut(u8) -> u16) -> [u16; CAPACITY] {
         let mut values = [0u16; CAPACITY];
         for (i, &p) in self.pins.iter().enumerate() {
-            let v = read(p);
-            if v < threshold {
-                return Sample::new();
-            }
-            values[i] = v;
+            values[i] = read(p);
         }
-        Sample::from_all(values)
+        values
+    }
+
+    /// Hit sample from already-read values when all four corners are present and `>= threshold`.
+    pub fn hits_from(values: &[u16; CAPACITY], n_pins: usize, threshold: u16) -> Sample {
+        if n_pins < CAPACITY {
+            return Sample::new();
+        }
+        if values.iter().any(|&v| v < threshold) {
+            return Sample::new();
+        }
+        Sample::from_all(*values)
+    }
+
+    /// Read each configured pin; return a sample only when every corner is `>= threshold`.
+    pub fn read_hits(&self, threshold: u16, read: impl FnMut(u8) -> u16) -> Sample {
+        let values = self.read_all(read);
+        Self::hits_from(&values, self.pins.len(), threshold)
     }
 }
 
@@ -303,6 +313,7 @@ fn store(a: &SensorArray) {
 static SENSOR_ARRAY: [AtomicU8; CAPACITY] = [const { AtomicU8::new(0) }; CAPACITY];
 static SENSOR_COUNT: AtomicUsize = AtomicUsize::new(0);
 static THRESHOLD: AtomicU32 = AtomicU32::new(DEFAULT_THRESHOLD as u32);
+static LAST_VALUES: [AtomicU32; CAPACITY] = [const { AtomicU32::new(0) }; CAPACITY];
 static NAME_BUF: [AtomicU8; NAME_CAP] = [const { AtomicU8::new(0) }; NAME_CAP];
 static NAME_LEN: AtomicUsize = AtomicUsize::new(0);
 
@@ -331,7 +342,28 @@ pub fn init_sensors(pins: &[u8]) -> Result<(), SensorError> {
     Ok(())
 }
 
+/// Poll every connected piezo, store last ADC values, and return a hit sample when all
+/// corners are present and `>= threshold`. One ADC pass per call.
+pub fn poll_sensors(threshold: u16) -> Sample {
+    let a = stored();
+    let values = a.read_all(utils::adc::read);
+    for (slot, &v) in LAST_VALUES.iter().zip(values.iter()) {
+        slot.store(v as u32, Ordering::Relaxed);
+    }
+    SensorArray::hits_from(&values, a.pins().len(), threshold)
+}
+
+/// Last ADC reading per corner from the most recent [`poll_sensors`] (0 until first poll).
+pub fn last_values() -> [u16; CAPACITY] {
+    let mut out = [0u16; CAPACITY];
+    for (i, slot) in LAST_VALUES.iter().enumerate() {
+        out[i] = slot.load(Ordering::Relaxed).min(u16::MAX as u32) as u16;
+    }
+    out
+}
+
 /// Read each stored sensor; sample only when all corners are `>= threshold`.
+/// Prefer [`poll_sensors`] in the main loop (also updates [`last_values`]).
 pub fn scan_sensors(threshold: u16) -> Sample {
     stored().read_hits(threshold, utils::adc::read)
 }

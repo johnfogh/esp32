@@ -40,7 +40,10 @@ fn app() -> ! {
     loop {
         // uptime_ms, time, battery, temperature, accel (whatever this build can read).
         utils::status::add_standard_readings();
-        let hits = esp32_sensor::sensors::scan_sensors(esp32_sensor::sensors::threshold());
+        // Always poll connected piezos; store last ADC values and record hits when all corners fire.
+        let hits = esp32_sensor::sensors::poll_sensors(esp32_sensor::sensors::threshold());
+        #[cfg(feature = "display")]
+        utils::display::set_grid_values(esp32_sensor::sensors::last_values());
         if !hits.is_empty() {
             let t = utils::synced_time().unwrap_or_else(utils::time::uptime_ms);
             esp32_sensor::sensors::push_hits(t, hits);

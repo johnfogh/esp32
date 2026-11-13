@@ -5,11 +5,39 @@
 //! Init as in the demo: colour inversion on (IPS), RGB order, no offsets, portrait.
 //!
 //! [`start`] spawns an esp-rtos thread (priority 0, like main and BLE) that redraws about once a
-//! second: device name `<project>-xxyyzz`, BLE state, uptime and the last log lines (mirrored by the
-//! `ble` logger), then the latest status-buffer sample ([`crate::status`]: up to 8 fields as
-//! `key=value`, plus pending sample count and sync state). Only lines whose text changed are redrawn (text drawn with a background colour,
-//! padded to the full width), and the thread sleeps between frames, so BLE is not starved.
+//! second: device name `<project>-xxyyzz`, BLE state, uptime, an optional 2×2 sensor value grid
+//! ([`set_grid_values`]), the last log lines (mirrored by the `ble` logger), then the latest
+//! status-buffer sample ([`crate::status`]: up to 8 fields as `key=value`, plus pending sample
+//! count and sync state). Only lines whose text changed are redrawn (text drawn with a background
+//! colour, padded to the full width), and the thread sleeps between frames, so BLE is not starved.
 //! The thread owns SPI2 and GPIO 1/38/39/40/42/45 (stolen): do not use them elsewhere.
+
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// Four corner ADC readings for the status-screen grid (TL, TR, BL, BR).
+static GRID_VALUES: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+static GRID_ON: AtomicBool = AtomicBool::new(false);
+
+/// Publish last sensor readings for the 2×2 display grid (TL, TR, BL, BR).
+/// No-op when this build has no status screen; still stores values so callers can be unconditional.
+pub fn set_grid_values(values: [u16; 4]) {
+    for (slot, v) in GRID_VALUES.iter().zip(values.iter()) {
+        slot.store(*v as u32, Ordering::Relaxed);
+    }
+    GRID_ON.store(true, Ordering::Release);
+}
+
+#[cfg_attr(not(all(feature = "display", feature = "hal", feature = "esp32s3")), allow(dead_code))]
+fn grid_values() -> Option<[u16; 4]> {
+    if !GRID_ON.load(Ordering::Acquire) {
+        return None;
+    }
+    let mut out = [0u16; 4];
+    for (i, slot) in GRID_VALUES.iter().enumerate() {
+        out[i] = slot.load(Ordering::Relaxed).min(u16::MAX as u32) as u16;
+    }
+    Some(out)
+}
 
 #[cfg(all(feature = "display", feature = "hal", feature = "esp32s3"))]
 mod imp {
@@ -34,10 +62,18 @@ mod imp {
     static PROJECT: StaticCell<&'static str> = StaticCell::new();
     const COLS_SMALL: usize = 40; // 240 px / 6 px
     const COLS_BIG: usize = 24; // 240 px / 10 px
+    /// Header lines: name, BLE, uptime.
+    const HDR: usize = 3;
+    /// 2×2 piezo grid (two text rows).
+    const GRID_LINES: usize = 2;
+    const GRID_ROW: usize = HDR;
+    /// Separator after grid.
+    const SEP_ROW: usize = HDR + GRID_LINES;
+    const LOG_ROW: usize = SEP_ROW + 1;
     /// Status-buffer rows (header + keys) below the log lines.
     const BUF_KEYS: usize = 8;
-    const ROWS: usize = 4 + RECENT_LINES + 1 + BUF_KEYS;
-    const BUF_ROW: usize = 4 + RECENT_LINES;
+    const ROWS: usize = HDR + GRID_LINES + 1 + RECENT_LINES + 1 + BUF_KEYS;
+    const BUF_ROW: usize = LOG_ROW + RECENT_LINES;
 
     pub fn start(project: &'static str) -> Result<(), &'static str> {
         let project: &'static &'static str = PROJECT.try_init(project).ok_or("display already started")?;
@@ -177,11 +213,16 @@ mod imp {
             lines[0] = Line::from_fmt(format_args!("{}", name.as_str()));
             lines[1] = Line::from_fmt(format_args!("BLE {state}"));
             lines[2] = Line::from_fmt(format_args!("uptime {:02}:{:02}:{:02}", up / 3600, up / 60 % 60, up % 60));
-            lines[3] = Line::from_fmt(format_args!("{:-<40}", ""));
+            if let Some([tl, tr, bl, br]) = super::grid_values() {
+                // 2×2 grid of last piezo ADC values (TL TR / BL BR).
+                lines[GRID_ROW] = Line::from_fmt(format_args!("TL:{tl:<5}  TR:{tr:<5}"));
+                lines[GRID_ROW + 1] = Line::from_fmt(format_args!("BL:{bl:<5}  BR:{br:<5}"));
+            }
+            lines[SEP_ROW] = Line::from_fmt(format_args!("{:-<40}", ""));
             let n = crate::blelog::recent(&mut rec, &mut lens);
             for i in 0..n {
                 let s = core::str::from_utf8(&rec[i][..lens[i]]).unwrap_or("?");
-                lines[4 + i] = Line::from_fmt(format_args!("{s}"));
+                lines[LOG_ROW + i] = Line::from_fmt(format_args!("{s}"));
             }
             let mut k = 0;
             let total = crate::status::latest(&mut |_t, _synced, body| {
@@ -198,14 +239,24 @@ mod imp {
             });
             let sync = if crate::status::synced_time().is_some() { "synced" } else { "unsynced" };
             lines[BUF_ROW] = Line::from_fmt(format_args!("-- latest sample ({total} pending, {sync}) {:-<40}", ""));
+            // y layout: name@4, BLE/uptime@30/44, grid@58/72, sep@86, logs from 98, status after logs.
+            const Y_NAME: i32 = 4;
+            const Y_HDR: i32 = 30;
+            const Y_GRID: i32 = 58;
+            const Y_SEP: i32 = 86;
+            const Y_LOG: i32 = 98;
             for (i, l) in lines.iter().enumerate() {
                 if shown[i] == *l { continue; }
                 shown[i] = *l;
                 let r = match i {
-                    0 => Text::with_baseline(l.padded(COLS_BIG), Point::new(0, 4), big, Baseline::Top).draw(&mut lcd),
-                    1 | 2 => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, 30 + 14 * (i as i32 - 1)), small, Baseline::Top).draw(&mut lcd),
-                    i if i >= BUF_ROW => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, 62 + 12 * (i as i32 - 3) + 4), if i == BUF_ROW { dim } else { small }, Baseline::Top).draw(&mut lcd),
-                    _ => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, 62 + 12 * (i as i32 - 3)), dim, Baseline::Top).draw(&mut lcd),
+                    0 => Text::with_baseline(l.padded(COLS_BIG), Point::new(0, Y_NAME), big, Baseline::Top).draw(&mut lcd),
+                    1 | 2 => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, Y_HDR + 14 * (i as i32 - 1)), small, Baseline::Top).draw(&mut lcd),
+                    i if i == GRID_ROW || i == GRID_ROW + 1 => {
+                        Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, Y_GRID + 14 * (i as i32 - GRID_ROW as i32)), small, Baseline::Top).draw(&mut lcd)
+                    }
+                    i if i == SEP_ROW => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, Y_SEP), dim, Baseline::Top).draw(&mut lcd),
+                    i if i >= BUF_ROW => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, Y_LOG + 12 * (i as i32 - LOG_ROW as i32) + 4), if i == BUF_ROW { dim } else { small }, Baseline::Top).draw(&mut lcd),
+                    _ => Text::with_baseline(l.padded(COLS_SMALL), Point::new(0, Y_LOG + 12 * (i as i32 - LOG_ROW as i32)), dim, Baseline::Top).draw(&mut lcd),
                 };
                 if r.is_err() { return Err("draw"); }
             }
