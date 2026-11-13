@@ -497,6 +497,27 @@ mod tests {
     }
 
     #[test]
+    fn read_all_keeps_every_corner() {
+        let a = SensorArray::from_pins(&[0, 2, 4, 6], even).unwrap();
+        let vals = |p: u8| [10u16, 0, 20, 0, 30, 0, 40][p as usize];
+        // Below-threshold corners are still returned (unlike read_hits).
+        assert_eq!(a.read_all(vals), [10, 20, 30, 40]);
+        let partial = SensorArray::from_pins(&[0, 2], even).unwrap();
+        assert_eq!(partial.read_all(vals), [10, 20, 0, 0]);
+    }
+
+    #[test]
+    fn hits_from_uses_polled_values() {
+        let values = [100u16, 150, 50, 200];
+        assert!(SensorArray::hits_from(&values, 4, 100).is_empty());
+        let values = [100u16, 150, 300, 200];
+        let h = SensorArray::hits_from(&values, 4, 100);
+        assert_eq!(h.get(Corner::Tl), Some(100));
+        assert_eq!(h.get(Corner::Br), Some(200));
+        assert!(SensorArray::hits_from(&values, 3, 0).is_empty());
+    }
+
+    #[test]
     fn buffer_skips_empty_and_prunes_window() {
         let mut b = HitBuffer::new();
         assert!(b.push(0, Sample::new()).is_none());
@@ -575,6 +596,30 @@ mod tests {
 
         assert!(init_sensors(&[0, 1, 2, 3, 4]).is_err());
         assert_eq!(stored().pins(), &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn poll_sensors_updates_last_values() {
+        let _g = lock_globals();
+        utils::adc::mock::reset();
+        buf_sync::with(|b| *b = HitBuffer::new());
+        set_threshold(DEFAULT_THRESHOLD);
+        init_sensors(&[0, 1, 2, 3]).unwrap();
+
+        for (p, v) in [(0, 111), (1, 222), (2, 333), (3, 444)] {
+            utils::adc::mock::set(p, v);
+        }
+        // Below threshold: no hit, but last values still stored.
+        assert!(poll_sensors(2000).is_empty());
+        assert_eq!(last_values(), [111, 222, 333, 444]);
+
+        for (p, v) in [(0, 2000), (1, 2100), (2, 2200), (3, 2300)] {
+            utils::adc::mock::set(p, v);
+        }
+        let h = poll_sensors(2000);
+        assert_eq!(last_values(), [2000, 2100, 2200, 2300]);
+        assert_eq!(h.get(Corner::Tl), Some(2000));
+        assert_eq!(h.get(Corner::Br), Some(2300));
     }
 
     #[test]
